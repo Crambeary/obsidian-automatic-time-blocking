@@ -111,6 +111,9 @@ interface ParsedTask {
   manualStartMinutes: number | null;
   statusMarker: " " | "/" | ">";
   indent: number;
+  sourcePath: string;
+  sourceLineNumber: number;
+  isExternalSource: boolean;
   subtasks: ParsedTask[];
 }
 
@@ -329,13 +332,20 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     activeContent: string,
     planningDate: Date,
   ): Promise<TaskCollectionResult> {
-    const activeNoteTasks = this.extractOpenTasks(activeContent);
+    const activeNoteTasks = this.extractOpenTasks(
+      activeContent,
+      activeFile.path,
+    );
     const externalSourceFiles = this.getScopedExternalTaskFiles(activeFile);
     const externalTasks: ParsedTask[] = [];
 
     for (const externalSourceFile of externalSourceFiles) {
       const sourceContent = await this.app.vault.cachedRead(externalSourceFile);
-      const sourceTasks = this.extractOpenTasks(sourceContent).filter((task) =>
+      const sourceTasks = this.extractOpenTasks(
+        sourceContent,
+        externalSourceFile.path,
+        true,
+      ).filter((task) =>
         this.externalTaskMatchesPlanningDate(task.text, planningDate),
       );
       externalTasks.push(...sourceTasks);
@@ -353,7 +363,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     };
   }
 
-  private extractOpenTasks(content: string): ParsedTask[] {
+  private extractOpenTasks(
+    content: string,
+    sourcePath: string,
+    isExternalSource = false,
+  ): ParsedTask[] {
     const lines = content.split(/\r?\n/);
     const tasks: ParsedTask[] = [];
     const taskStack: ParsedTask[] = [];
@@ -391,6 +405,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           this.parseManualStartMinutes(rawText),
         statusMarker: taskMatch[1] as " " | "/" | ">",
         indent: indentMatch?.[1].length ?? 0,
+        sourcePath,
+        sourceLineNumber: index + 1,
+        isExternalSource,
         subtasks: [],
       };
 
@@ -627,6 +644,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       .trim();
   }
 
+  private buildTaskSourceBacklink(task: ParsedTask): string {
+    if (!task.isExternalSource || task.sourcePath.length === 0) {
+      return "";
+    }
+
+    const normalizedPath = task.sourcePath.replace(/\.md$/i, "");
+    return ` [[${normalizedPath}|↗]]`;
+  }
+
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
       /(^|\s)(?:([📅⏳🛫])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
@@ -790,7 +816,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     depth = 0,
   ): string[] {
     const indentation = "    ".repeat(depth);
-    const renderedTaskText = this.escapePlannerDateTokens(task.text);
+    const renderedTaskText = `${this.escapePlannerDateTokens(task.text)}${this.buildTaskSourceBacklink(task)}`;
     const renderedLines = [
       `${indentation}- [${task.statusMarker}] ${prefix}${renderedTaskText}`,
     ];
