@@ -17,6 +17,32 @@ import * as ical from "node-ical";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
+interface DataviewIndexedTask {
+  text?: string;
+  completed?: boolean;
+  fullyCompleted?: boolean;
+  status?: string;
+  children?: DataviewIndexedTask[];
+}
+
+interface DataviewPageFile {
+  path?: string;
+  tasks?: DataviewIndexedTask[];
+}
+
+interface DataviewPage {
+  file?: DataviewPageFile;
+}
+
+interface DataviewApi {
+  pages: (source?: string) => unknown;
+}
+
+interface ExternalTaskDiscoveryResult {
+  files: TFile[];
+  usedDataviewIndex: boolean;
+}
+
 interface TimeRange {
   startMinutes: number;
   endMinutes: number;
@@ -120,6 +146,7 @@ interface ParsedTask {
 interface TaskCollectionResult {
   tasks: ParsedTask[];
   externalSourceFileCount: number;
+  usedDataviewIndex: boolean;
 }
 
 interface ParsedTaskTimeRange {
@@ -321,9 +348,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       taskCollection.externalSourceFileCount > 0
         ? ` Included tasks from ${taskCollection.externalSourceFileCount} external source note${taskCollection.externalSourceFileCount === 1 ? "" : "s"}.`
         : "";
+    const discoverySuffix =
+      taskCollection.usedDataviewIndex &&
+      taskCollection.externalSourceFileCount > 0
+        ? " Used Dataview indexed discovery for external task lookup."
+        : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}${externalSourceSuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
     );
   }
 
@@ -336,7 +368,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       activeContent,
       activeFile.path,
     );
-    const externalSourceFiles = this.getScopedExternalTaskFiles(activeFile);
+    const externalTaskDiscovery = this.getExternalTaskDiscovery(
+      activeFile,
+      planningDate,
+    );
+    const externalSourceFiles = externalTaskDiscovery.files;
     const externalTasks: ParsedTask[] = [];
 
     for (const externalSourceFile of externalSourceFiles) {
@@ -360,6 +396,28 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return {
       tasks,
       externalSourceFileCount: externalSourceFiles.length,
+      usedDataviewIndex: externalTaskDiscovery.usedDataviewIndex,
+    };
+  }
+
+  private getExternalTaskDiscovery(
+    activeFile: TFile,
+    planningDate: Date,
+  ): ExternalTaskDiscoveryResult {
+    const dataviewFiles = this.getDataviewIndexedExternalTaskFiles(
+      activeFile,
+      planningDate,
+    );
+    if (dataviewFiles) {
+      return {
+        files: dataviewFiles,
+        usedDataviewIndex: true,
+      };
+    }
+
+    return {
+      files: this.getScopedExternalTaskFiles(activeFile),
+      usedDataviewIndex: false,
     };
   }
 
@@ -459,6 +517,152 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     sourceFiles.delete(activeFile.path);
     return [...sourceFiles.values()].sort((leftFile, rightFile) =>
       leftFile.path.localeCompare(rightFile.path),
+    );
+  }
+
+  private getDataviewIndexedExternalTaskFiles(
+    activeFile: TFile,
+    planningDate: Date,
+  ): TFile[] | null {
+    const dataviewApi = this.getDataviewApi();
+    if (!dataviewApi) {
+      return null;
+    }
+
+    const normalizedNotePaths = new Set(
+      this.settings.externalTaskNotePaths
+        .map((path) => this.normalizeScopedSourcePath(path))
+        .filter((path) => path.length > 0),
+    );
+    const normalizedFolderPaths = this.settings.externalTaskFolderPaths
+      .map((path) => this.normalizeScopedSourcePath(path))
+      .filter((path) => path.length > 0);
+
+    if (normalizedNotePaths.size === 0 && normalizedFolderPaths.length === 0) {
+      return [];
+    }
+
+    const indexedPages = this.normalizeDataviewPages(dataviewApi.pages());
+    const sourceFiles = new Map<string, TFile>();
+
+    for (const page of indexedPages) {
+      const pagePath = page.file?.path;
+      if (!pagePath || pagePath === activeFile.path) {
+        continue;
+      }
+
+      if (
+        !this.isPathInExternalTaskScope(
+          pagePath,
+          normalizedNotePaths,
+          normalizedFolderPaths,
+        )
+      ) {
+        continue;
+      }
+
+      const indexedTasks = this.flattenDataviewTasks(page.file?.tasks ?? []);
+      const hasMatchingTask = indexedTasks.some((task) => {
+        if (!this.isDataviewTaskOpen(task)) {
+          return false;
+        }
+
+        return this.externalTaskMatchesPlanningDate(
+          task.text ?? "",
+          planningDate,
+        );
+      });
+      if (!hasMatchingTask) {
+        continue;
+      }
+
+      const abstractFile = this.app.vault.getAbstractFileByPath(pagePath);
+      if (abstractFile instanceof TFile && abstractFile.extension === "md") {
+        sourceFiles.set(abstractFile.path, abstractFile);
+      }
+    }
+
+    return [...sourceFiles.values()].sort((leftFile, rightFile) =>
+      leftFile.path.localeCompare(rightFile.path),
+    );
+  }
+
+  private getDataviewApi(): DataviewApi | null {
+    const plugins = (
+      this.app as App & {
+        plugins?: {
+          plugins?: Record<string, { api?: DataviewApi }>;
+        };
+      }
+    ).plugins;
+
+    const dataviewPlugin = plugins?.plugins?.dataview;
+    if (
+      !dataviewPlugin?.api ||
+      typeof dataviewPlugin.api.pages !== "function"
+    ) {
+      return null;
+    }
+
+    return dataviewPlugin.api;
+  }
+
+  private normalizeDataviewPages(value: unknown): DataviewPage[] {
+    if (Array.isArray(value)) {
+      return value as DataviewPage[];
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      "values" in value &&
+      Array.isArray((value as { values?: unknown }).values)
+    ) {
+      return (value as { values: DataviewPage[] }).values;
+    }
+
+    return [];
+  }
+
+  private flattenDataviewTasks(
+    tasks: DataviewIndexedTask[],
+  ): DataviewIndexedTask[] {
+    const flattenedTasks: DataviewIndexedTask[] = [];
+
+    for (const task of tasks) {
+      flattenedTasks.push(task);
+
+      const childTasks = Array.isArray(task.children) ? task.children : [];
+      if (childTasks.length > 0) {
+        flattenedTasks.push(...this.flattenDataviewTasks(childTasks));
+      }
+    }
+
+    return flattenedTasks;
+  }
+
+  private isDataviewTaskOpen(task: DataviewIndexedTask): boolean {
+    if (task.completed === true || task.fullyCompleted === true) {
+      return false;
+    }
+
+    return task.status === " " || task.status === "/" || task.status === ">";
+  }
+
+  private isPathInExternalTaskScope(
+    filePath: string,
+    notePaths: Set<string>,
+    folderPaths: string[],
+  ): boolean {
+    const normalizedPath = this.normalizeScopedSourcePath(filePath);
+    if (notePaths.has(normalizedPath)) {
+      return true;
+    }
+
+    return folderPaths.some(
+      (folderPath) =>
+        normalizedPath === folderPath ||
+        normalizedPath.startsWith(`${folderPath}/`),
     );
   }
 

@@ -18,6 +18,7 @@ What is implemented today:
 - a command named `Generate time blocks for active note`
 - parsing of open or in-progress Markdown task lines from the active note
 - optional intake from configured external Markdown notes or folders, limited to explicit user-selected source paths rather than whole-vault scanning
+- Dataview-backed indexed discovery for configured external notes and folders when the Dataview plugin is installed, with the existing scoped file and folder scan retained as fallback when it is not
 - generated planner lines for external-source tasks preserve a compact Obsidian backlink to the source note so you can jump back to where the task came from
 - preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
 - NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
@@ -94,12 +95,12 @@ The current intended direction for external-note discovery is:
 
 Current prototype behavior for this area:
 
-- external-note discovery is currently implemented through plugin-managed file and folder settings only
+- external-note discovery now prefers Dataview indexed lookup within the configured file and folder scope when Dataview is installed
+- when Dataview is unavailable, external-note discovery falls back to the existing plugin-managed file and folder scan
 - the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due, scheduled, or start date token on or before the planning note date
 - current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, `🛫 YYYY-MM-DD`, and `>YYYY-MM-DD`
 - generated planner lines for external tasks append a compact `[[note|↗]]` backlink to the source note
 - generated planner lines keep `📅`, `⏳`, and `�` visible as plain text while wrapping the detected date text in inline code for Day Planner compatibility
-- Dataview-backed indexed discovery is not implemented yet
 
 Exact parsing and prioritization rules are still being designed.
 
@@ -147,6 +148,7 @@ Implemented today:
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
 - optional scoped external-note task discovery from configured note and folder paths
+- Dataview-backed indexed discovery of matching external source files when Dataview is installed, limited to the same configured note and folder scope
 - generated planner lines for external tasks append a compact backlink to the source note
 - preservation of open versus in-progress task markers in generated planner lines
 - exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
