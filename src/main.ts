@@ -102,6 +102,7 @@ interface ParsedTask {
   durationMinutes: number;
   priority: TaskPriority;
   manualStartMinutes: number | null;
+  statusMarker: " " | "/" | ">";
   indent: number;
   subtasks: ParsedTask[];
 }
@@ -319,6 +320,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         durationMinutes,
         priority: this.parseTaskPriority(rawText),
         manualStartMinutes: this.parseManualStartMinutes(rawText),
+        statusMarker: taskMatch[1] as " " | "/" | ">",
         indent: indentMatch?.[1].length ?? 0,
         subtasks: [],
       };
@@ -480,7 +482,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           continue;
         }
 
-        scheduledLines.push(`- [ ] ${prefix}${task.text}`);
+        scheduledLines.push(`- [${task.statusMarker}] ${prefix}${task.text}`);
       }
 
       const finalScheduledSegment =
@@ -530,7 +532,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     depth = 0,
   ): string[] {
     const indentation = "    ".repeat(depth);
-    const renderedLines = [`${indentation}- [ ] ${prefix}${task.text}`];
+    const renderedLines = [
+      `${indentation}- [${task.statusMarker}] ${prefix}${task.text}`,
+    ];
 
     for (const subtask of task.subtasks) {
       renderedLines.push(

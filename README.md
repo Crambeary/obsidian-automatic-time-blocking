@@ -17,6 +17,7 @@ What is implemented today:
 - a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, and break duration between generated blocks
 - a command named `Generate time blocks from active note`
 - parsing of open or in-progress Markdown task lines from the active note
+- preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
 - NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
 - preservation of nested open subtasks under their parent task when generated output is written back to the note
 - duration markers in the form `[30m]` or `@30m`
@@ -122,6 +123,7 @@ Implemented today:
 
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
+- preservation of open versus in-progress task markers in generated planner lines
 - exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
 - preservation of nested open subtasks under the scheduled parent task in generated output
 - preservation of duration markers such as `[30m]` and `@30m` in generated task text
@@ -151,6 +153,7 @@ Current behavior:
 - `@45m` or `[45m]` sets the task duration
 - `13:00` sets the start time for that task in 24-hour format
 - if a task has a manual start time but no duration marker, the plugin uses the configured default duration
+- generated planner lines preserve whether a source task was open (`[ ]`) or in progress (`[/]` or `[>]`)
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
 - tasks without a manual start time are still scheduled automatically using the existing priority ordering rules
 - automatic scheduling can either begin at the next snapped interval boundary or at the current time, based on settings
