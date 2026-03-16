@@ -20,8 +20,10 @@ What is implemented today:
 - NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
 - preservation of nested open subtasks under their parent task when generated output is written back to the note
 - duration markers in the form `[30m]` or `@30m`
+- manual task start times in `HH:MM` 24-hour format, such as `13:00`, with optional duration markers like `@45m`
 - preservation of duration markers on generated time-block lines, so task text like `Task @60m` stays visible after scheduling
 - ordering of active-note tasks by Obsidian Tasks priority markers before generating blocks, using `🔺`, `⏫`, `🔼`, no marker, `🔽`, and `⏬` from highest to lowest
+- explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
 - generated output written under a configurable heading in the current note
 - generated blocks snapped to a configurable minute interval and limited to the configured work day
 
@@ -115,9 +117,27 @@ Implemented today:
 - exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
 - preservation of nested open subtasks under the scheduled parent task in generated output
 - preservation of duration markers such as `[30m]` and `@30m` in generated task text
+- parsing of explicit task start times such as `13:00`, with those manual times taking precedence over priority-based scheduling
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
 - generation of simple sequential time blocks into a configurable heading
 - configurable work-day bounds and start-interval snapping for generated blocks
+
+## Task Syntax Supported Today
+
+For active-note tasks, the current prototype understands these scheduling markers:
+
+- `- [ ] Write report`
+- `- [ ] Write report @45m`
+- `- [ ] 13:00 Write report`
+- `- [ ] 13:00 Write report @45m`
+
+Current behavior:
+
+- `@45m` or `[45m]` sets the task duration
+- `13:00` sets the start time for that task in 24-hour format
+- if a task has a manual start time but no duration marker, the plugin uses the configured default duration
+- manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
+- tasks without a manual start time are still scheduled automatically using the existing priority ordering and interval snapping rules
 
 The README still describes a broader intended direction beyond what the current code supports.
 

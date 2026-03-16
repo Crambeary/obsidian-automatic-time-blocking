@@ -43,6 +43,7 @@ interface ParsedTask {
   text: string;
   durationMinutes: number;
   priority: TaskPriority;
+  manualStartMinutes: number | null;
   indent: number;
   subtasks: ParsedTask[];
 }
@@ -50,6 +51,13 @@ interface ParsedTask {
 interface GeneratedTimeBlocks {
   scheduledLines: string[];
   unscheduledLines: string[];
+  scheduledTaskCount: number;
+  skippedTaskCount: number;
+}
+
+interface AutomaticSchedulingResult {
+  nextAutomaticTaskIndex: number;
+  nextAutomaticStartMinutes: number;
   scheduledTaskCount: number;
   skippedTaskCount: number;
 }
@@ -179,6 +187,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         text: this.cleanTaskText(rawText),
         durationMinutes,
         priority: this.parseTaskPriority(rawText),
+        manualStartMinutes: this.parseManualStartMinutes(rawText),
         indent: indentMatch?.[1].length ?? 0,
         subtasks: [],
       };
@@ -250,6 +259,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private cleanTaskText(taskText: string): string {
     return taskText
       .replace(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/, "")
+      .replace(/(^|\s)(\d{1,2}:\d{2})(?=\s|$)/, "$1")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -258,37 +268,139 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const scheduledLines: string[] = [];
     const unscheduledLines: string[] = [];
     let scheduledTaskCount = 0;
-    let currentMinutes = this.getInitialStartMinutes();
+    const automaticTasks = tasks.filter(
+      (task) => task.manualStartMinutes === null,
+    );
+    const manuallyTimedTasks = tasks
+      .filter((task) => task.manualStartMinutes !== null)
+      .sort(
+        (leftTask, rightTask) =>
+          (leftTask.manualStartMinutes ?? 0) -
+          (rightTask.manualStartMinutes ?? 0),
+      );
+    let automaticTaskIndex = 0;
+    let currentAutomaticStartMinutes = this.getInitialStartMinutes();
+    const configuredDayStartMinutes = this.parseTimeToMinutes(
+      this.settings.dayStartTime,
+    );
     const workDayEndMinutes = this.getWorkDayEndMinutes();
     let skippedTaskCount = 0;
 
-    for (const task of tasks) {
-      currentMinutes = this.snapMinutesToInterval(currentMinutes);
-      if (currentMinutes >= workDayEndMinutes) {
+    for (const task of manuallyTimedTasks) {
+      const manualStartMinutes = task.manualStartMinutes ?? 0;
+      const automaticSchedulingResult = this.scheduleAutomaticTasksUntil(
+        automaticTasks,
+        automaticTaskIndex,
+        currentAutomaticStartMinutes,
+        Math.min(manualStartMinutes, workDayEndMinutes),
+        workDayEndMinutes,
+        scheduledLines,
+        unscheduledLines,
+      );
+      automaticTaskIndex = automaticSchedulingResult.nextAutomaticTaskIndex;
+      currentAutomaticStartMinutes =
+        automaticSchedulingResult.nextAutomaticStartMinutes;
+      scheduledTaskCount += automaticSchedulingResult.scheduledTaskCount;
+      skippedTaskCount += automaticSchedulingResult.skippedTaskCount;
+
+      const endMinutes = manualStartMinutes + task.durationMinutes;
+      if (
+        manualStartMinutes < configuredDayStartMinutes ||
+        manualStartMinutes >= workDayEndMinutes ||
+        endMinutes > workDayEndMinutes
+      ) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
 
-      const start = this.formatMinutesAsTime(currentMinutes);
-      const endMinutes = currentMinutes + task.durationMinutes;
-      if (endMinutes > workDayEndMinutes) {
-        skippedTaskCount += 1;
-        unscheduledLines.push(...this.buildRenderedTaskLines(task));
-        continue;
-      }
-
-      currentMinutes = endMinutes;
-      const end = this.formatMinutesAsTime(endMinutes);
       scheduledTaskCount += 1;
       scheduledLines.push(
-        ...this.buildRenderedTaskLines(task, `${start}-${end} `),
+        ...this.buildRenderedTaskLines(
+          task,
+          `${this.formatMinutesAsTime(manualStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
+        ),
+      );
+      currentAutomaticStartMinutes = Math.max(
+        currentAutomaticStartMinutes,
+        endMinutes,
       );
     }
+
+    const remainingAutomaticSchedulingResult = this.scheduleAutomaticTasksUntil(
+      automaticTasks,
+      automaticTaskIndex,
+      currentAutomaticStartMinutes,
+      workDayEndMinutes,
+      workDayEndMinutes,
+      scheduledLines,
+      unscheduledLines,
+    );
+    scheduledTaskCount += remainingAutomaticSchedulingResult.scheduledTaskCount;
+    skippedTaskCount += remainingAutomaticSchedulingResult.skippedTaskCount;
 
     return {
       scheduledLines,
       unscheduledLines,
+      scheduledTaskCount,
+      skippedTaskCount,
+    };
+  }
+
+  private scheduleAutomaticTasksUntil(
+    automaticTasks: ParsedTask[],
+    startIndex: number,
+    startMinutes: number,
+    stopBeforeMinutes: number,
+    workDayEndMinutes: number,
+    scheduledLines: string[],
+    unscheduledLines: string[],
+  ): AutomaticSchedulingResult {
+    let nextAutomaticTaskIndex = startIndex;
+    let nextAutomaticStartMinutes = startMinutes;
+    let scheduledTaskCount = 0;
+    let skippedTaskCount = 0;
+
+    while (nextAutomaticTaskIndex < automaticTasks.length) {
+      nextAutomaticStartMinutes = this.snapMinutesToInterval(
+        nextAutomaticStartMinutes,
+      );
+
+      if (
+        nextAutomaticStartMinutes >= workDayEndMinutes ||
+        nextAutomaticStartMinutes >= stopBeforeMinutes
+      ) {
+        break;
+      }
+
+      const task = automaticTasks[nextAutomaticTaskIndex];
+      const endMinutes = nextAutomaticStartMinutes + task.durationMinutes;
+
+      if (endMinutes > workDayEndMinutes) {
+        skippedTaskCount += 1;
+        unscheduledLines.push(...this.buildRenderedTaskLines(task));
+        nextAutomaticTaskIndex += 1;
+        continue;
+      }
+
+      if (endMinutes > stopBeforeMinutes) {
+        break;
+      }
+
+      scheduledTaskCount += 1;
+      scheduledLines.push(
+        ...this.buildRenderedTaskLines(
+          task,
+          `${this.formatMinutesAsTime(nextAutomaticStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
+        ),
+      );
+      nextAutomaticStartMinutes = endMinutes;
+      nextAutomaticTaskIndex += 1;
+    }
+
+    return {
+      nextAutomaticTaskIndex,
+      nextAutomaticStartMinutes,
       scheduledTaskCount,
       skippedTaskCount,
     };
@@ -377,20 +489,39 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return interval;
   }
 
-  private parseTimeToMinutes(value: string): number {
+  private parseManualStartMinutes(taskText: string): number | null {
+    const timeMatch = taskText.match(/(?:^|\s)(\d{1,2}:\d{2})(?=\s|$)/);
+    if (!timeMatch) {
+      return null;
+    }
+
+    const parsedMinutes = this.parseTimeToMinutesOrNull(timeMatch[1]);
+    return parsedMinutes;
+  }
+
+  private parseTimeToMinutesOrNull(value: string): number | null {
     const match = value.match(/^(\d{1,2}):(\d{2})$/);
     if (!match) {
-      return this.parseTimeToMinutes(DEFAULT_SETTINGS.dayStartTime);
+      return null;
     }
 
     const hours = Number(match[1]);
     const minutes = Number(match[2]);
 
     if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-      return this.parseTimeToMinutes(DEFAULT_SETTINGS.dayStartTime);
+      return null;
     }
 
     return hours * 60 + minutes;
+  }
+
+  private parseTimeToMinutes(value: string): number {
+    const parsedMinutes = this.parseTimeToMinutesOrNull(value);
+    if (parsedMinutes === null) {
+      return this.parseTimeToMinutes(DEFAULT_SETTINGS.dayStartTime);
+    }
+
+    return parsedMinutes;
   }
 
   private formatMinutesAsTime(totalMinutes: number): string {
