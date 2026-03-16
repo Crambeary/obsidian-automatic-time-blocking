@@ -122,6 +122,7 @@ There is no mature automated test setup yet.
 
 When making changes, verify as much as the repo supports:
 
+- after implementing a feature, always run `npm run build` before reporting completion
 - the plugin still builds with `npm run build`
 - development mode still starts with `npm run dev`
 - settings and output assumptions match the current README

@@ -10,13 +10,17 @@ interface ObsidianAutomaticTimeBlockingSettings {
   plannerHeading: string;
   plannerHeadingLevel: number;
   dayStartTime: string;
+  workDayEndTime: string;
   defaultDurationMinutes: number;
+  startIntervalMinutes: number;
 }
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   plannerHeading: "Time Blocks",
   plannerHeadingLevel: 2,
   dayStartTime: "09:00",
+  workDayEndTime: "17:00",
   defaultDurationMinutes: 30,
+  startIntervalMinutes: 15,
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
@@ -26,6 +30,12 @@ interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAu
 interface ParsedTask {
   text: string;
   durationMinutes: number;
+}
+
+interface GeneratedTimeBlocks {
+  scheduledLines: string[];
+  unscheduledLines: string[];
+  skippedTaskCount: number;
 }
 
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
@@ -90,18 +100,35 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       return;
     }
 
-    const generatedLines = this.buildTimeBlockLines(tasks);
+    const generatedTimeBlocks = this.buildTimeBlockLines(tasks);
+
+    if (generatedTimeBlocks.scheduledLines.length === 0) {
+      new Notice(
+        "No time blocks fit inside the configured work day. Adjust your work day or task durations.",
+      );
+      return;
+    }
+
+    const sectionBody = this.buildPlannerSectionBody(generatedTimeBlocks);
+
     const updatedContent = this.upsertHeadingSection(
       content,
       this.settings.plannerHeading,
       this.settings.plannerHeadingLevel,
-      generatedLines.join("\n"),
+      sectionBody,
     );
 
     await this.app.vault.modify(view.file, updatedContent);
 
+    const generatedCount = generatedTimeBlocks.scheduledLines.length;
+    const skippedCount = generatedTimeBlocks.skippedTaskCount;
+    const skippedSuffix =
+      skippedCount > 0
+        ? ` Skipped ${skippedCount} task${skippedCount === 1 ? "" : "s"} that would exceed the configured work day.`
+        : "";
+
     new Notice(
-      `Generated ${tasks.length} time block${tasks.length === 1 ? "" : "s"}.`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}`,
     );
   }
 
@@ -146,18 +173,53 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       .trim();
   }
 
-  private buildTimeBlockLines(tasks: ParsedTask[]): string[] {
-    const lines: string[] = [];
+  private buildTimeBlockLines(tasks: ParsedTask[]): GeneratedTimeBlocks {
+    const scheduledLines: string[] = [];
+    const unscheduledLines: string[] = [];
     let currentMinutes = this.getInitialStartMinutes();
+    const workDayEndMinutes = this.getWorkDayEndMinutes();
+    let skippedTaskCount = 0;
 
     for (const task of tasks) {
+      currentMinutes = this.snapMinutesToInterval(currentMinutes);
+      if (currentMinutes >= workDayEndMinutes) {
+        skippedTaskCount += 1;
+        unscheduledLines.push(`- [ ] ${task.text}`);
+        continue;
+      }
+
       const start = this.formatMinutesAsTime(currentMinutes);
-      currentMinutes += task.durationMinutes;
-      const end = this.formatMinutesAsTime(currentMinutes);
-      lines.push(`- [ ] ${start}-${end} ${task.text}`);
+      const endMinutes = currentMinutes + task.durationMinutes;
+      if (endMinutes > workDayEndMinutes) {
+        skippedTaskCount += 1;
+        unscheduledLines.push(`- [ ] ${task.text}`);
+        continue;
+      }
+
+      currentMinutes = endMinutes;
+      const end = this.formatMinutesAsTime(endMinutes);
+      scheduledLines.push(`- [ ] ${start}-${end} ${task.text}`);
     }
 
-    return lines;
+    return {
+      scheduledLines,
+      unscheduledLines,
+      skippedTaskCount,
+    };
+  }
+
+  private buildPlannerSectionBody(
+    generatedTimeBlocks: GeneratedTimeBlocks,
+  ): string {
+    const lines = [...generatedTimeBlocks.scheduledLines];
+
+    if (generatedTimeBlocks.unscheduledLines.length > 0) {
+      lines.push("");
+      lines.push("### Not Time Blocked");
+      lines.push(...generatedTimeBlocks.unscheduledLines);
+    }
+
+    return lines.join("\n");
   }
 
   private getInitialStartMinutes(): number {
@@ -166,9 +228,37 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const snappedCurrentMinutes = Math.ceil(currentMinutes / 15) * 15;
+    const snappedCurrentMinutes = this.snapMinutesToInterval(currentMinutes);
 
     return Math.max(configuredStartMinutes, snappedCurrentMinutes);
+  }
+
+  private getWorkDayEndMinutes(): number {
+    const configuredEndMinutes = this.parseTimeToMinutes(
+      this.settings.workDayEndTime,
+    );
+    const configuredStartMinutes = this.parseTimeToMinutes(
+      this.settings.dayStartTime,
+    );
+
+    return configuredEndMinutes >= configuredStartMinutes
+      ? configuredEndMinutes
+      : this.parseTimeToMinutes(DEFAULT_SETTINGS.workDayEndTime);
+  }
+
+  private snapMinutesToInterval(totalMinutes: number): number {
+    const interval = this.getValidatedStartIntervalMinutes();
+    return Math.ceil(totalMinutes / interval) * interval;
+  }
+
+  private getValidatedStartIntervalMinutes(): number {
+    const interval = Math.floor(this.settings.startIntervalMinutes);
+
+    if (!Number.isFinite(interval) || interval <= 0) {
+      return DEFAULT_SETTINGS.startIntervalMinutes;
+    }
+
+    return interval;
   }
 
   private parseTimeToMinutes(value: string): number {
@@ -214,7 +304,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     let sectionEnd = lines.length;
     for (let index = headingIndex + 1; index < lines.length; index += 1) {
-      if (/^#{1,6}\s+/.test(lines[index])) {
+      const headingMatch = lines[index].match(/^(#{1,6})\s+/);
+      if (!headingMatch) {
+        continue;
+      }
+
+      const currentHeadingLevel = headingMatch[1].length;
+      if (currentHeadingLevel <= normalizedLevel) {
         sectionEnd = index;
         break;
       }
@@ -279,7 +375,7 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Day start time")
       .setDesc(
-        "Time used for the first generated block in HH:MM 24-hour format.",
+        "Time used for the first generated block in HH:MM 24-hour format. The plugin starts no earlier than this setting and no earlier than the current time.",
       )
       .addText((text) =>
         text
@@ -288,6 +384,22 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.dayStartTime =
               value.trim() || DEFAULT_SETTINGS.dayStartTime;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Work day end time")
+      .setDesc(
+        "Latest allowed end time for generated blocks in HH:MM 24-hour format. Tasks that would run past this time are skipped.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("17:00")
+          .setValue(this.plugin.settings.workDayEndTime)
+          .onChange(async (value) => {
+            this.plugin.settings.workDayEndTime =
+              value.trim() || DEFAULT_SETTINGS.workDayEndTime;
             await this.plugin.saveSettings();
           }),
       );
@@ -307,6 +419,25 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
               Number.isFinite(parsedValue) && parsedValue > 0
                 ? parsedValue
                 : DEFAULT_SETTINGS.defaultDurationMinutes;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Start interval")
+      .setDesc(
+        "Minute boundary used when placing each generated block. For example, 15 means blocks start on :00, :15, :30, or :45.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("15")
+          .setValue(String(this.plugin.settings.startIntervalMinutes))
+          .onChange(async (value) => {
+            const parsedValue = Number(value);
+            this.plugin.settings.startIntervalMinutes =
+              Number.isFinite(parsedValue) && parsedValue > 0
+                ? parsedValue
+                : DEFAULT_SETTINGS.startIntervalMinutes;
             await this.plugin.saveSettings();
           }),
       );

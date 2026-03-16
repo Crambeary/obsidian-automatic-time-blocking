@@ -14,11 +14,12 @@ The plugin files now live at the repository root rather than inside a nested `ob
 
 What is implemented today:
 
-- a settings tab for output heading, day start time, and default duration
+- a settings tab for output heading, day start time, work day end time, start interval, and default duration
 - a command named `Generate time blocks from active note`
 - parsing of open or in-progress Markdown task lines from the active note
 - duration markers in the form `[30m]` or `@30m`
-- generated output written under a configurable `##` heading in the current note
+- generated output written under a configurable heading in the current note
+- generated blocks snapped to a configurable minute interval and limited to the configured work day
 
 What is not implemented yet:
 
@@ -107,6 +108,7 @@ Implemented today:
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
 - generation of simple sequential time blocks into a configurable heading
+- configurable work-day bounds and start-interval snapping for generated blocks
 
 The README still describes a broader intended direction beyond what the current code supports.
 
