@@ -146,12 +146,14 @@ For active-note tasks, the current prototype understands these scheduling marker
 - `- [ ] Write report`
 - `- [ ] Write report @45m`
 - `- [ ] 13:00 Write report`
+- `- [ ] 13:00-14:30 Write report`
 - `- [ ] 13:00 Write report @45m`
 
 Current behavior:
 
 - `@45m` or `[45m]` sets the task duration
 - `13:00` sets the start time for that task in 24-hour format
+- `13:00-14:30` sets both the start time and duration for that task from the explicit range
 - if a task has a manual start time but no duration marker, the plugin uses the configured default duration
 - generated planner lines preserve whether a source task was open (`[ ]`) or in progress (`[/]` or `[>]`)
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later

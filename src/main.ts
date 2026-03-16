@@ -107,6 +107,12 @@ interface ParsedTask {
   subtasks: ParsedTask[];
 }
 
+interface ParsedTaskTimeRange {
+  startMinutes: number;
+  endMinutes: number;
+  durationMinutes: number;
+}
+
 interface GeneratedTimeBlocks {
   scheduledLines: string[];
   unscheduledLines: string[];
@@ -315,12 +321,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
       const indentMatch = line.match(/^(\s*)[-*]\s+\[( |\/|>)\]\s+/);
       const rawText = taskMatch[2].trim();
-      const durationMinutes = this.parseDurationMinutes(rawText);
+      const parsedTimeRange = this.parseExplicitTaskTimeRange(rawText);
+      const durationMinutes =
+        parsedTimeRange?.durationMinutes ?? this.parseDurationMinutes(rawText);
       const parsedTask: ParsedTask = {
         text: this.cleanTaskText(rawText),
         durationMinutes,
         priority: this.parseTaskPriority(rawText),
-        manualStartMinutes: this.parseManualStartMinutes(rawText),
+        manualStartMinutes:
+          parsedTimeRange?.startMinutes ??
+          this.parseManualStartMinutes(rawText),
         statusMarker: taskMatch[1] as " " | "/" | ">",
         indent: indentMatch?.[1].length ?? 0,
         subtasks: [],
@@ -384,6 +394,33 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return "none";
+  }
+
+  private parseExplicitTaskTimeRange(
+    taskText: string,
+  ): ParsedTaskTimeRange | null {
+    const timeRangeMatch = taskText.match(
+      /^\s*(\d{1,2}:\d{2})-(\d{1,2}:\d{2})(?=\s|$)/,
+    );
+    if (!timeRangeMatch) {
+      return null;
+    }
+
+    const startMinutes = this.parseTimeToMinutesOrNull(timeRangeMatch[1]);
+    const endMinutes = this.parseTimeToMinutesOrNull(timeRangeMatch[2]);
+    if (
+      startMinutes === null ||
+      endMinutes === null ||
+      endMinutes <= startMinutes
+    ) {
+      return null;
+    }
+
+    return {
+      startMinutes,
+      endMinutes,
+      durationMinutes: endMinutes - startMinutes,
+    };
   }
 
   private getTaskPriorityRank(priority: TaskPriority): number {
