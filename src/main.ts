@@ -140,6 +140,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private cleanTaskText(taskText: string): string {
     return taskText
+      .replace(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/, "")
       .replace(/\[(\d+)m\]|@(\d+)m/gi, "")
       .replace(/\s+/g, " ")
       .trim();
@@ -147,7 +148,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private buildTimeBlockLines(tasks: ParsedTask[]): string[] {
     const lines: string[] = [];
-    let currentMinutes = this.parseTimeToMinutes(this.settings.dayStartTime);
+    let currentMinutes = this.getInitialStartMinutes();
 
     for (const task of tasks) {
       const start = this.formatMinutesAsTime(currentMinutes);
@@ -157,6 +158,17 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return lines;
+  }
+
+  private getInitialStartMinutes(): number {
+    const configuredStartMinutes = this.parseTimeToMinutes(
+      this.settings.dayStartTime,
+    );
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const snappedCurrentMinutes = Math.ceil(currentMinutes / 15) * 15;
+
+    return Math.max(configuredStartMinutes, snappedCurrentMinutes);
   }
 
   private parseTimeToMinutes(value: string): number {
@@ -245,7 +257,6 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.plannerHeadingLevel = value;
             await this.plugin.saveSettings();
-            this.display();
           }),
       );
 
@@ -262,7 +273,6 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
             this.plugin.settings.plannerHeading =
               value.trim() || DEFAULT_SETTINGS.plannerHeading;
             await this.plugin.saveSettings();
-            this.display();
           }),
       );
 
