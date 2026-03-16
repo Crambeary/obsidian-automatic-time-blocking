@@ -32,7 +32,7 @@ What is implemented today:
 - optional break buffers between generated blocks
 - optional plugin-owned remote calendars that are treated as busy time during scheduling
 - optional ignored calendar event patterns, matched case-insensitively against event titles, so selected recurring calendar events do not block scheduling
-- external-note date matching for planning-note intake using Tasks-style due and scheduled markers such as `📅 2026-03-16`, `⏳ 2026-03-16`, or a plain `>2026-03-16` token in the task text, with overdue dated tasks included when the marked date is on or before the planning note date
+- external-note date matching for planning-note intake using Tasks-style due, scheduled, and start markers such as `📅 2026-03-16`, `⏳ 2026-03-16`, `🛫 2026-03-16`, or a plain `>2026-03-16` token in the task text, with overdue dated tasks included when the marked date is on or before the planning note date
 - when those date markers are rendered into generated planner lines, the emoji stays visible as normal text and the date portion is wrapped in inline code so Day Planner does not reinterpret it as a different planning date
 - grouped Remote Calendar settings with an `Add remote calendar` button for managing more than one internet calendar feed
 - a manual `Refresh busy calendars` command for reloading configured remote calendars
@@ -94,9 +94,9 @@ The current intended direction for external-note discovery is:
 Current prototype behavior for this area:
 
 - external-note discovery is currently implemented through plugin-managed file and folder settings only
-- the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due or scheduled date token on or before the planning note date
-- current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, and `>YYYY-MM-DD`
-- generated planner lines keep `📅` and `⏳` visible as plain text while wrapping the date portion in inline code for Day Planner compatibility
+- the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due, scheduled, or start date token on or before the planning note date
+- current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, `🛫 YYYY-MM-DD`, and `>YYYY-MM-DD`
+- generated planner lines keep `📅`, `⏳`, and `�` visible as plain text while wrapping the detected date text in inline code for Day Planner compatibility
 - Dataview-backed indexed discovery is not implemented yet
 
 Exact parsing and prioritization rules are still being designed.
@@ -151,8 +151,8 @@ Implemented today:
 - preservation of duration markers such as `[30m]` and `@30m` in generated task text
 - parsing of explicit task start times such as `13:00`, with those manual times taking precedence over priority ordering
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
-- external tasks from configured source notes or folders are included when their text carries a due or scheduled date marker on or before the active note date
-- generated planner output keeps `📅` and `⏳` visible while wrapping the detected date text in inline code so Day Planner keeps them on the current day instead of moving them
+- external tasks from configured source notes or folders are included when their text carries a due, scheduled, or start date marker on or before the active note date
+- generated planner output keeps `📅`, `⏳`, and `🛫` visible while wrapping the detected date text in inline code so Day Planner keeps them on the current day instead of moving them
 - generation of simple sequential time blocks into a configurable heading
 - configurable work-day bounds, automatic start behavior, optional split scheduling across gaps, optional breaks between generated blocks, and start-interval snapping for generated blocks
 - optional avoidance of busy windows from configured remote calendars

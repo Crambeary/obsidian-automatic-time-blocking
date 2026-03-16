@@ -493,7 +493,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private extractTasksDateTokens(taskText: string): string[] {
     const matchedTokens = new Set<string>();
     const tokenPatterns = [
-      /[📅⏳]\s*(\d{4}-\d{2}-\d{2})/g,
+      /[📅⏳🛫]\s*(\d{4}-\d{2}-\d{2})/g,
       /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g,
     ];
 
@@ -629,7 +629,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
-      /(^|\s)(?:([📅⏳])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
+      /(^|\s)(?:([📅⏳🛫])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
       (
         _,
         leadingWhitespace: string,
