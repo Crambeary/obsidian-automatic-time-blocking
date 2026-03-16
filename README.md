@@ -6,9 +6,26 @@ Obsidian Automatic Time Blocking is a prototype Obsidian plugin for turning sele
 
 This project is in the prototype stage.
 
-The current codebase is still close to the generated plugin scaffold, and the scheduling behavior described below is the intended product direction rather than a complete implementation today.
+The current codebase now includes an initial working prototype: a real settings tab and a command that can turn open tasks from the active note into sequential time blocks under a configurable heading.
 
 The plugin files now live at the repository root rather than inside a nested `obsidian-atb/` folder.
+
+## Current Prototype
+
+What is implemented today:
+
+- a settings tab for output heading, day start time, and default duration
+- a command named `Generate time blocks from active note`
+- parsing of open or in-progress Markdown task lines from the active note
+- duration markers in the form `[30m]` or `@30m`
+- generated output written under a configurable `##` heading in the current note
+
+What is not implemented yet:
+
+- direct integration with the Obsidian Tasks plugin API
+- Kanban note parsing
+- more advanced scheduling heuristics
+- richer metadata preservation rules
 
 ## Vision
 
@@ -59,6 +76,8 @@ The documentation and future implementation are aimed at:
 
 ## Development
 
+For full dev-build installation steps in Obsidian, see [`docs/development.md`](docs/development.md).
+
 Install dependencies:
 
 ```bash
@@ -81,22 +100,24 @@ Note: if you use hot reloading in Obsidian, you may also need the related hot-re
 
 ## Current Code Reality
 
-At the moment, the repository still contains mostly scaffold code:
+The repository now contains a small but real prototype rather than only scaffold code.
 
-- a placeholder command
-- a placeholder modal
-- a placeholder settings tab
+Implemented today:
 
-That means this README describes the intended direction of the plugin, while the implementation is still catching up.
+- a persisted settings tab
+- active-note task parsing for open or in-progress Markdown tasks
+- generation of simple sequential time blocks into a configurable heading
+
+The README still describes a broader intended direction beyond what the current code supports.
 
 ## Roadmap
 
 Near-term priorities are:
 
-- build a real settings page for task-source and output configuration
+- expand task-source support beyond the active note
 - decide the exact task selection rules across Obsidian Tasks, Kanban, and daily-note inputs
-- implement duration marker parsing
-- generate daily-note output that works with Day Planner
+- improve generated output for stronger Day Planner compatibility
+- preserve task emoji and related metadata more faithfully
 
 Ideas intentionally deferred for now include broader scheduling heuristics, more advanced prioritization schemes, and other larger automation behaviors.
 

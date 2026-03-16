@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-atb",
+  "name": "Obsidian Automatic Time Blocking",
+  "description": "Pulling tasks from the tasks plugin, and automatically assings them times of the day based off rules set by you.",
+  "author": "Marc Totaro",
+
+  "minAppVersion": "0.11.0",
+  "version": "0.0.1"
+}
