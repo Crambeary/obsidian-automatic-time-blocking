@@ -1,5 +1,6 @@
 import {
   App,
+  FuzzySuggestModal,
   MarkdownView,
   Modal,
   Notice,
@@ -7,6 +8,8 @@ import {
   PluginSettingTab,
   requestUrl,
   Setting,
+  TFile,
+  TFolder,
 } from "obsidian";
 import moment from "moment";
 import { tz } from "moment-timezone";
@@ -76,6 +79,8 @@ interface ObsidianAutomaticTimeBlockingSettings {
   breakDurationMinutes: number;
   remoteCalendarUrls: string[];
   ignoredCalendarEventPatterns: string;
+  externalTaskNotePaths: string[];
+  externalTaskFolderPaths: string[];
 }
 
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
@@ -90,6 +95,8 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   breakDurationMinutes: 0,
   remoteCalendarUrls: [],
   ignoredCalendarEventPatterns: "",
+  externalTaskNotePaths: [],
+  externalTaskFolderPaths: [],
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
@@ -105,6 +112,11 @@ interface ParsedTask {
   statusMarker: " " | "/" | ">";
   indent: number;
   subtasks: ParsedTask[];
+}
+
+interface TaskCollectionResult {
+  tasks: ParsedTask[];
+  externalSourceFileCount: number;
 }
 
 interface ParsedTaskTimeRange {
@@ -125,6 +137,8 @@ interface ScheduledTaskSegment {
   endMinutes: number;
 }
 
+type ExternalSourceSelection = TFile | TFolder;
+
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
@@ -134,7 +148,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     this.addCommand({
       id: "generate-time-blocks-from-active-note",
-      name: "Generate time blocks from active note",
+      name: "Generate time blocks for active note",
       checkCallback: (checking: boolean) => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view || !view.file) {
@@ -249,11 +263,18 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     const content = await this.app.vault.cachedRead(view.file);
-    const tasks = this.extractOpenTasks(content);
     const planningDate = this.resolvePlanningDate(view.file.basename);
+    const taskCollection = await this.collectTasksForPlanningNote(
+      view.file,
+      content,
+      planningDate,
+    );
+    const tasks = taskCollection.tasks;
 
     if (tasks.length === 0) {
-      new Notice("No open or in-progress tasks found in the active note.");
+      new Notice(
+        "No open or in-progress tasks matched the active note or configured external source notes for this planning date.",
+      );
       return;
     }
 
@@ -293,10 +314,43 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       failedCalendarCount > 0
         ? ` ${failedCalendarCount} calendar feed${failedCalendarCount === 1 ? "" : "s"} could not be loaded.`
         : "";
+    const externalSourceSuffix =
+      taskCollection.externalSourceFileCount > 0
+        ? ` Included tasks from ${taskCollection.externalSourceFileCount} external source note${taskCollection.externalSourceFileCount === 1 ? "" : "s"}.`
+        : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}${externalSourceSuffix}`,
     );
+  }
+
+  private async collectTasksForPlanningNote(
+    activeFile: TFile,
+    activeContent: string,
+    planningDate: Date,
+  ): Promise<TaskCollectionResult> {
+    const activeNoteTasks = this.extractOpenTasks(activeContent);
+    const externalSourceFiles = this.getScopedExternalTaskFiles(activeFile);
+    const externalTasks: ParsedTask[] = [];
+
+    for (const externalSourceFile of externalSourceFiles) {
+      const sourceContent = await this.app.vault.cachedRead(externalSourceFile);
+      const sourceTasks = this.extractOpenTasks(sourceContent).filter((task) =>
+        this.externalTaskMatchesPlanningDate(task.text, planningDate),
+      );
+      externalTasks.push(...sourceTasks);
+    }
+
+    const tasks = [...activeNoteTasks, ...externalTasks].sort(
+      (leftTask, rightTask) =>
+        this.getTaskPriorityRank(rightTask.priority) -
+        this.getTaskPriorityRank(leftTask.priority),
+    );
+
+    return {
+      tasks,
+      externalSourceFileCount: externalSourceFiles.length,
+    };
   }
 
   private extractOpenTasks(content: string): ParsedTask[] {
@@ -357,10 +411,144 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       taskStack.push(parsedTask);
     }
 
-    return tasks.sort(
-      (leftTask, rightTask) =>
-        this.getTaskPriorityRank(rightTask.priority) -
-        this.getTaskPriorityRank(leftTask.priority),
+    return tasks;
+  }
+
+  private getScopedExternalTaskFiles(activeFile: TFile): TFile[] {
+    const normalizedNotePaths = this.settings.externalTaskNotePaths
+      .map((path) => this.normalizeScopedSourcePath(path))
+      .filter((path) => path.length > 0);
+    const normalizedFolderPaths = this.settings.externalTaskFolderPaths
+      .map((path) => this.normalizeScopedSourcePath(path))
+      .filter((path) => path.length > 0);
+    const sourceFiles = new Map<string, TFile>();
+
+    for (const notePath of normalizedNotePaths) {
+      const abstractFile = this.app.vault.getAbstractFileByPath(notePath);
+      if (abstractFile instanceof TFile && abstractFile.extension === "md") {
+        sourceFiles.set(abstractFile.path, abstractFile);
+      }
+    }
+
+    for (const folderPath of normalizedFolderPaths) {
+      const abstractFile = this.app.vault.getAbstractFileByPath(folderPath);
+      if (!(abstractFile instanceof TFolder)) {
+        continue;
+      }
+
+      this.collectMarkdownFilesFromFolder(abstractFile, sourceFiles);
+    }
+
+    sourceFiles.delete(activeFile.path);
+    return [...sourceFiles.values()].sort((leftFile, rightFile) =>
+      leftFile.path.localeCompare(rightFile.path),
+    );
+  }
+
+  private collectMarkdownFilesFromFolder(
+    folder: TFolder,
+    sourceFiles: Map<string, TFile>,
+  ): void {
+    for (const child of folder.children) {
+      if (child instanceof TFile && child.extension === "md") {
+        sourceFiles.set(child.path, child);
+        continue;
+      }
+
+      if (child instanceof TFolder) {
+        this.collectMarkdownFilesFromFolder(child, sourceFiles);
+      }
+    }
+  }
+
+  private normalizeScopedSourcePath(value: string): string {
+    return value
+      .replace(/\\/g, "/")
+      .trim()
+      .replace(/^\/+|\/+$/g, "");
+  }
+
+  private externalTaskMatchesPlanningDate(
+    taskText: string,
+    planningDate: Date,
+  ): boolean {
+    const dateTokens = this.extractTasksDateTokens(taskText);
+    if (dateTokens.length === 0) {
+      return false;
+    }
+
+    const planningDateStart = new Date(
+      planningDate.getFullYear(),
+      planningDate.getMonth(),
+      planningDate.getDate(),
+    );
+    return dateTokens.some((dateToken) => {
+      const tokenDate = this.parseDateKey(dateToken);
+      return (
+        tokenDate !== null && tokenDate.getTime() <= planningDateStart.getTime()
+      );
+    });
+  }
+
+  private extractTasksDateTokens(taskText: string): string[] {
+    const matchedTokens = new Set<string>();
+    const tokenPatterns = [
+      /[📅⏳]\s*(\d{4}-\d{2}-\d{2})/g,
+      /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g,
+    ];
+
+    for (const tokenPattern of tokenPatterns) {
+      let match = tokenPattern.exec(taskText);
+      while (match) {
+        const normalizedDate = this.normalizeIsoDateToken(match[1]);
+        if (normalizedDate) {
+          matchedTokens.add(normalizedDate);
+        }
+
+        match = tokenPattern.exec(taskText);
+      }
+    }
+
+    return [...matchedTokens];
+  }
+
+  private normalizeIsoDateToken(value: string): string | null {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const parsedDate = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+    );
+    if (!Number.isFinite(parsedDate.getTime())) {
+      return null;
+    }
+
+    return this.formatDateKey(parsedDate);
+  }
+
+  private parseDateKey(value: string): Date | null {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const parsedDate = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+    );
+    if (!Number.isFinite(parsedDate.getTime())) {
+      return null;
+    }
+
+    return new Date(
+      parsedDate.getFullYear(),
+      parsedDate.getMonth(),
+      parsedDate.getDate(),
     );
   }
 
@@ -437,6 +625,30 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       .replace(/(^|\s)(\d{1,2}:\d{2})(?=\s|$)/, "$1")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private escapePlannerDateTokens(taskText: string): string {
+    return taskText.replace(
+      /(^|\s)(?:([📅⏳])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
+      (
+        _,
+        leadingWhitespace: string,
+        emojiMarker?: string,
+        emojiDate?: string,
+        plainMarker?: string,
+        plainDate?: string,
+      ) => {
+        if (emojiMarker && emojiDate) {
+          return `${leadingWhitespace}${emojiMarker} \`${emojiDate}\``;
+        }
+
+        if (plainMarker && plainDate) {
+          return `${leadingWhitespace}\`${plainMarker}${plainDate}\``;
+        }
+
+        return _;
+      },
+    );
   }
 
   private buildTimeBlockLines(
@@ -526,7 +738,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           continue;
         }
 
-        scheduledLines.push(`- [${task.statusMarker}] ${prefix}${task.text}`);
+        scheduledLines.push(
+          `- [${task.statusMarker}] ${prefix}${this.escapePlannerDateTokens(task.text)}`,
+        );
       }
 
       const finalScheduledSegment =
@@ -576,8 +790,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     depth = 0,
   ): string[] {
     const indentation = "    ".repeat(depth);
+    const renderedTaskText = this.escapePlannerDateTokens(task.text);
     const renderedLines = [
-      `${indentation}- [${task.statusMarker}] ${prefix}${task.text}`,
+      `${indentation}- [${task.statusMarker}] ${prefix}${renderedTaskText}`,
     ];
 
     for (const subtask of task.subtasks) {
@@ -1780,6 +1995,49 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   }
 }
 
+class ExternalSourceSuggestModal extends FuzzySuggestModal<ExternalSourceSelection> {
+  sourceType: "note" | "folder";
+  onChoose: (selection: ExternalSourceSelection) => void | Promise<void>;
+
+  constructor(
+    app: App,
+    sourceType: "note" | "folder",
+    onChoose: (selection: ExternalSourceSelection) => void | Promise<void>,
+  ) {
+    super(app);
+    this.sourceType = sourceType;
+    this.onChoose = onChoose;
+    this.setPlaceholder(
+      sourceType === "note" ? "Select a Markdown note" : "Select a folder",
+    );
+  }
+
+  getItems(): ExternalSourceSelection[] {
+    if (this.sourceType === "note") {
+      return this.app.vault
+        .getMarkdownFiles()
+        .sort((leftFile, rightFile) =>
+          leftFile.path.localeCompare(rightFile.path),
+        );
+    }
+
+    return this.app.vault
+      .getAllLoadedFiles()
+      .filter((file): file is TFolder => file instanceof TFolder)
+      .sort((leftFolder, rightFolder) =>
+        leftFolder.path.localeCompare(rightFolder.path),
+      );
+  }
+
+  getItemText(item: ExternalSourceSelection): string {
+    return item.path;
+  }
+
+  async onChooseItem(item: ExternalSourceSelection): Promise<void> {
+    await this.onChoose(item);
+  }
+}
+
 class CalendarPreviewModal extends Modal {
   previewData: CalendarPreviewData;
 
@@ -1992,6 +2250,162 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
                 : DEFAULT_SETTINGS.breakDurationMinutes;
             await this.plugin.saveSettings();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("External task source notes")
+      .setDesc(
+        "Optional. Pick one or more Markdown notes to pull dated open tasks from outside the active planning note. External tasks are included only when they carry a planning-date marker such as 📅 2026-03-16, ⏳ 2026-03-16, or >2026-03-16.",
+      );
+
+    if (this.plugin.settings.externalTaskNotePaths.length === 0) {
+      containerEl.createEl("p", {
+        text: "No external source notes selected yet.",
+      });
+    }
+
+    this.plugin.settings.externalTaskNotePaths.forEach((notePath, index) => {
+      new Setting(containerEl)
+        .setName(`Source note ${index + 1}`)
+        .setDesc(notePath)
+        .addButton((button) =>
+          button.setButtonText("Change").onClick(() => {
+            new ExternalSourceSuggestModal(
+              this.app,
+              "note",
+              async (selection) => {
+                if (!(selection instanceof TFile)) {
+                  return;
+                }
+
+                this.plugin.settings.externalTaskNotePaths[index] =
+                  selection.path;
+                await this.plugin.saveSettings();
+                this.display();
+              },
+            ).open();
+          }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("trash")
+            .setTooltip("Remove source note")
+            .onClick(async () => {
+              this.plugin.settings.externalTaskNotePaths.splice(index, 1);
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+    });
+
+    new Setting(containerEl)
+      .setName("Add external source note")
+      .setDesc(
+        "Pick another Markdown note to include as an external task source.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Add note").onClick(() => {
+          new ExternalSourceSuggestModal(
+            this.app,
+            "note",
+            async (selection) => {
+              if (!(selection instanceof TFile)) {
+                return;
+              }
+
+              if (
+                !this.plugin.settings.externalTaskNotePaths.includes(
+                  selection.path,
+                )
+              ) {
+                this.plugin.settings.externalTaskNotePaths.push(selection.path);
+                await this.plugin.saveSettings();
+              }
+
+              this.display();
+            },
+          ).open();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("External task source folders")
+      .setDesc(
+        "Optional. Pick one or more folders as a fallback source scope when tasks are stored across multiple notes. Automatic Time Blocking will read Markdown notes inside these folders instead of scanning the whole vault.",
+      );
+
+    if (this.plugin.settings.externalTaskFolderPaths.length === 0) {
+      containerEl.createEl("p", {
+        text: "No external source folders selected yet.",
+      });
+    }
+
+    this.plugin.settings.externalTaskFolderPaths.forEach(
+      (folderPath, index) => {
+        new Setting(containerEl)
+          .setName(`Source folder ${index + 1}`)
+          .setDesc(folderPath)
+          .addButton((button) =>
+            button.setButtonText("Change").onClick(() => {
+              new ExternalSourceSuggestModal(
+                this.app,
+                "folder",
+                async (selection) => {
+                  if (!(selection instanceof TFolder)) {
+                    return;
+                  }
+
+                  this.plugin.settings.externalTaskFolderPaths[index] =
+                    selection.path;
+                  await this.plugin.saveSettings();
+                  this.display();
+                },
+              ).open();
+            }),
+          )
+          .addExtraButton((button) =>
+            button
+              .setIcon("trash")
+              .setTooltip("Remove source folder")
+              .onClick(async () => {
+                this.plugin.settings.externalTaskFolderPaths.splice(index, 1);
+                await this.plugin.saveSettings();
+                this.display();
+              }),
+          );
+      },
+    );
+
+    new Setting(containerEl)
+      .setName("Add external source folder")
+      .setDesc(
+        "Pick another folder to include as an external task source scope.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Add folder").onClick(() => {
+          new ExternalSourceSuggestModal(
+            this.app,
+            "folder",
+            async (selection) => {
+              if (!(selection instanceof TFolder)) {
+                return;
+              }
+
+              if (
+                !this.plugin.settings.externalTaskFolderPaths.includes(
+                  selection.path,
+                )
+              ) {
+                this.plugin.settings.externalTaskFolderPaths.push(
+                  selection.path,
+                );
+                await this.plugin.saveSettings();
+              }
+
+              this.display();
+            },
+          ).open();
+        }),
       );
 
     new Setting(containerEl)

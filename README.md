@@ -15,8 +15,9 @@ The plugin files now live at the repository root rather than inside a nested `ob
 What is implemented today:
 
 - a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, and break duration between generated blocks
-- a command named `Generate time blocks from active note`
+- a command named `Generate time blocks for active note`
 - parsing of open or in-progress Markdown task lines from the active note
+- optional intake from configured external Markdown notes or folders, limited to explicit user-selected source paths rather than whole-vault scanning
 - preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
 - NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
 - preservation of nested open subtasks under their parent task when generated output is written back to the note
@@ -31,6 +32,8 @@ What is implemented today:
 - optional break buffers between generated blocks
 - optional plugin-owned remote calendars that are treated as busy time during scheduling
 - optional ignored calendar event patterns, matched case-insensitively against event titles, so selected recurring calendar events do not block scheduling
+- external-note date matching for planning-note intake using Tasks-style due and scheduled markers such as `📅 2026-03-16`, `⏳ 2026-03-16`, or a plain `>2026-03-16` token in the task text, with overdue dated tasks included when the marked date is on or before the planning note date
+- when those date markers are rendered into generated planner lines, the emoji stays visible as normal text and the date portion is wrapped in inline code so Day Planner does not reinterpret it as a different planning date
 - grouped Remote Calendar settings with an `Add remote calendar` button for managing more than one internet calendar feed
 - a manual `Refresh busy calendars` command for reloading configured remote calendars
 - a `Preview busy calendars for active note` command and settings action for inspecting which busy events are visible for the current planning date
@@ -88,6 +91,14 @@ The current intended direction for external-note discovery is:
 - use Tasks-style scheduled and due dates to decide whether an external task belongs to the active planning date
 - preserve enough source metadata to support future links back to the original task location
 
+Current prototype behavior for this area:
+
+- external-note discovery is currently implemented through plugin-managed file and folder settings only
+- the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due or scheduled date token on or before the planning note date
+- current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, and `>YYYY-MM-DD`
+- generated planner lines keep `📅` and `⏳` visible as plain text while wrapping the date portion in inline code for Day Planner compatibility
+- Dataview-backed indexed discovery is not implemented yet
+
 Exact parsing and prioritization rules are still being designed.
 
 ## Daily Note Output
@@ -133,12 +144,15 @@ Implemented today:
 
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
+- optional scoped external-note task discovery from configured note and folder paths
 - preservation of open versus in-progress task markers in generated planner lines
 - exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
 - preservation of nested open subtasks under the scheduled parent task in generated output
 - preservation of duration markers such as `[30m]` and `@30m` in generated task text
-- parsing of explicit task start times such as `13:00`, with those manual times taking precedence over priority-based scheduling
+- parsing of explicit task start times such as `13:00`, with those manual times taking precedence over priority ordering
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
+- external tasks from configured source notes or folders are included when their text carries a due or scheduled date marker on or before the active note date
+- generated planner output keeps `📅` and `⏳` visible while wrapping the detected date text in inline code so Day Planner keeps them on the current day instead of moving them
 - generation of simple sequential time blocks into a configurable heading
 - configurable work-day bounds, automatic start behavior, optional split scheduling across gaps, optional breaks between generated blocks, and start-interval snapping for generated blocks
 - optional avoidance of busy windows from configured remote calendars
