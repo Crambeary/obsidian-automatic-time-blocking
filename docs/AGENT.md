@@ -36,10 +36,11 @@ The intended plugin behavior is:
 - `docs/AGENT.md`: repository instructions for AI agents
 - `README.md`: end-user overview and product direction
 - `noteplan-atb.html`: local reference material for the NotePlan-inspired workflow
+- plugin source files now live at the repository root, not under a nested `obsidian-atb/` folder
 
 ## Commands
 
-Run commands from `obsidian-atb/`.
+Run commands from the repository root.
 
 - Install dependencies: `npm install`
 - Start development build: `npm run dev`

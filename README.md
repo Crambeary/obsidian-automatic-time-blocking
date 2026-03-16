@@ -8,6 +8,8 @@ This project is in the prototype stage.
 
 The current codebase is still close to the generated plugin scaffold, and the scheduling behavior described below is the intended product direction rather than a complete implementation today.
 
+The plugin files now live at the repository root rather than inside a nested `obsidian-atb/` folder.
+
 ## Vision
 
 The goal is to help you plan your day by taking tasks you actually want to work on and placing them into your daily note as time blocks.
