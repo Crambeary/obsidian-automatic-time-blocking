@@ -203,6 +203,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   }
 
   async saveSettings() {
+    this.calendarPreviewCache.clear();
     await this.saveData(this.settings);
   }
 
