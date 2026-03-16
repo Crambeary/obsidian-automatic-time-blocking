@@ -152,8 +152,21 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const lines = content.split(/\r?\n/);
     const tasks: ParsedTask[] = [];
     const taskStack: ParsedTask[] = [];
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
 
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
+      if (
+        plannerSectionRange &&
+        index >= plannerSectionRange.start &&
+        index < plannerSectionRange.end
+      ) {
+        continue;
+      }
+
       const taskMatch = line.match(/^\s*[-*]\s+\[( |\/|>)\]\s+(.*)$/);
       if (!taskMatch) {
         continue;
@@ -374,22 +387,17 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
   }
 
-  private upsertHeadingSection(
-    content: string,
+  private findHeadingSectionRange(
+    lines: string[],
     heading: string,
     headingLevel: number,
-    sectionBody: string,
-  ): string {
-    const trimmedContent = content.replace(/\s+$/, "");
-    const lines =
-      trimmedContent.length > 0 ? trimmedContent.split(/\r?\n/) : [];
+  ): { start: number; end: number } | null {
     const normalizedLevel = Math.min(Math.max(Math.floor(headingLevel), 1), 6);
     const headingLine = `${"#".repeat(normalizedLevel)} ${heading}`;
     const headingIndex = lines.findIndex((line) => line.trim() === headingLine);
 
     if (headingIndex === -1) {
-      const prefix = trimmedContent.length > 0 ? `${trimmedContent}\n\n` : "";
-      return `${prefix}${headingLine}\n${sectionBody}\n`;
+      return null;
     }
 
     let sectionEnd = lines.length;
@@ -406,10 +414,41 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       }
     }
 
+    return {
+      start: headingIndex,
+      end: sectionEnd,
+    };
+  }
+
+  private upsertHeadingSection(
+    content: string,
+    heading: string,
+    headingLevel: number,
+    sectionBody: string,
+  ): string {
+    const trimmedContent = content.replace(/\s+$/, "");
+    const lines =
+      trimmedContent.length > 0 ? trimmedContent.split(/\r?\n/) : [];
+    const sectionRange = this.findHeadingSectionRange(
+      lines,
+      heading,
+      headingLevel,
+    );
+
+    if (!sectionRange) {
+      const normalizedLevel = Math.min(
+        Math.max(Math.floor(headingLevel), 1),
+        6,
+      );
+      const headingLine = `${"#".repeat(normalizedLevel)} ${heading}`;
+      const prefix = trimmedContent.length > 0 ? `${trimmedContent}\n\n` : "";
+      return `${prefix}${headingLine}\n${sectionBody}\n`;
+    }
+
     const updatedLines = [
-      ...lines.slice(0, headingIndex + 1),
+      ...lines.slice(0, sectionRange.start + 1),
       sectionBody,
-      ...lines.slice(sectionEnd),
+      ...lines.slice(sectionRange.end),
     ];
 
     return `${updatedLines.join("\n")}\n`;

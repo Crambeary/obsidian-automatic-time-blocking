@@ -17,6 +17,7 @@ What is implemented today:
 - a settings tab for output heading, day start time, work day end time, start interval, and default duration
 - a command named `Generate time blocks from active note`
 - parsing of open or in-progress Markdown task lines from the active note
+- NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
 - preservation of nested open subtasks under their parent task when generated output is written back to the note
 - duration markers in the form `[30m]` or `@30m`
 - preservation of duration markers on generated time-block lines, so task text like `Task @60m` stays visible after scheduling
@@ -75,6 +76,7 @@ Generated time blocks are intended to be written into the daily note rather than
 The documentation and future implementation are aimed at:
 
 - writing into a configurable heading
+- treating the generated heading as plugin output rather than as an authoritative task source during reruns
 - preserving useful task text and emojis where possible
 - keeping the result compatible with Day Planner-style rendering and manual editing
 
@@ -110,6 +112,7 @@ Implemented today:
 
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
+- exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
 - preservation of nested open subtasks under the scheduled parent task in generated output
 - preservation of duration markers such as `[30m]` and `@30m` in generated task text
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
@@ -125,6 +128,7 @@ Near-term priorities are:
 - expand task-source support beyond the active note
 - decide the exact task selection rules across Obsidian Tasks, Kanban, and daily-note inputs
 - improve generated output for stronger Day Planner compatibility
+- support marking a generated Day Planner task complete and reflecting that completion back to the source task that created it
 - preserve task emoji and related metadata more faithfully
 
 Ideas intentionally deferred for now include broader scheduling heuristics, more advanced prioritization schemes, and other larger automation behaviors.

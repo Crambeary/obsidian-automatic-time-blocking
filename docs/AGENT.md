@@ -23,6 +23,7 @@ The intended plugin behavior is:
 - focus on open and in-progress work
 - support duration markers on tasks
 - write generated time blocks into a configurable heading in the daily note
+- for the current prototype, follow a NotePlan-like rerun model where generated time blocks are treated as output, not as an authoritative task source on the next run
 - preserve source task emojis where possible
 - keep output compatible with Day Planner-style note formatting
 - expose core behavior through a settings page early
@@ -83,6 +84,7 @@ If you are asked to work on product features, prioritize these areas first:
 4. writing time blocks into the daily note under a configurable heading
 5. preserving task emojis where practical
 6. maintaining Day Planner-compatible output
+7. syncing completion state from generated planner tasks back to the source task when the user marks the generated item done
 
 ## Task Source Expectations
 
@@ -94,6 +96,8 @@ Treat these as the main expected sources unless the user says otherwise:
 
 When implementing source support, prefer explicit filtering rules over implicit guesses.
 
+For the current active-note prototype, tasks under the configured planner heading should be treated as generated output and excluded from source-task intake so reruns rebuild the plan from the underlying task list.
+
 ## Output Expectations
 
 Generated time blocks should target the daily note, not a hidden store.
@@ -104,6 +108,8 @@ Favor output that is:
 - editable by the user after insertion
 - compatible with Day Planner formatting expectations
 - respectful of source task text and emoji metadata where possible
+
+When changing rerun behavior, prefer the current NotePlan-like model of replacing plugin-generated planner output from source tasks rather than re-parsing previously generated block lines as new input.
 
 ## Commits
 
