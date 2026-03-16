@@ -301,11 +301,24 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     if (generatedTimeBlocks.unscheduledLines.length > 0) {
       lines.push("");
-      lines.push("### Not Time Blocked");
+      lines.push(this.buildPlannerSubheadingLine("Not Time Blocked"));
       lines.push(...generatedTimeBlocks.unscheduledLines);
     }
 
     return lines.join("\n");
+  }
+
+  private buildPlannerSubheadingLine(title: string): string {
+    const normalizedPlannerHeadingLevel = Math.min(
+      Math.max(Math.floor(this.settings.plannerHeadingLevel), 1),
+      6,
+    );
+
+    if (normalizedPlannerHeadingLevel >= 6) {
+      return `**${title}**`;
+    }
+
+    return `${"#".repeat(normalizedPlannerHeadingLevel + 1)} ${title}`;
   }
 
   private buildRenderedTaskLines(

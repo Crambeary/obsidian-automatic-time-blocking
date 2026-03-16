@@ -143,8 +143,12 @@ The current prototype supports:
 - a real settings tab
 - a command named `Generate time blocks from active note`
 - parsing open or in-progress Markdown task lines from the active note
+- NotePlan-like rerun behavior that excludes tasks already inside the configured planner section when rebuilding the plan
+- preservation of nested open subtasks beneath their parent task in generated output
 - duration markers in the form `[30m]` or `@30m`
-- writing generated blocks under a configurable `##` heading in the active note
+- priority ordering based on Obsidian Tasks priority markers, from highest to lowest, with unmarked tasks between medium and low priority
+- writing generated blocks under a configurable heading in the active note, including configurable heading level and heading text
+- snapping generated block start times to a configurable interval and skipping tasks that would exceed the configured work day
 
 It does not yet implement:
 

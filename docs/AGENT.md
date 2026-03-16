@@ -7,7 +7,7 @@ This file gives AI coding agents repo-specific guidance for working safely and e
 - Project name: `obsidian-atb`
 - Plugin name: Obsidian Automatic Time Blocking
 - Project stage: prototype
-- Current implementation state: still close to the generated Obsidian plugin scaffold
+- Current implementation state: a small but real prototype with persisted settings and active-note time-block generation
 - Primary product direction: turn selected tasks into time blocks written into the daily note for Day Planner-compatible workflows
 
 ## Product Intent
