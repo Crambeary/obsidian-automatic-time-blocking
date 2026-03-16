@@ -30,7 +30,7 @@ The intended plugin behavior is:
 
 ## Repository Layout
 
-- `src/main.ts`: current plugin entry point and placeholder scaffold logic
+- `src/main.ts`: current plugin entry point, settings UI, active-note task parsing, and planner output logic
 - `manifest.json`: Obsidian plugin metadata
 - `package.json`: development scripts and package metadata
 - `types.d.ts`: Obsidian type declarations used by the scaffold
@@ -49,11 +49,22 @@ Run commands from the repository root.
 
 ## Current Reality
 
-The current code is mostly scaffold code. Do not assume existing commands, settings, or UI names reflect the final product direction.
+The current code is no longer scaffold-only. It includes a working prototype centered on the active note.
+
+Implemented today:
+
+- persisted settings for planner heading text and level, day start time, work day end time, default duration, and start interval
+- a `Generate time blocks from active note` command and matching ribbon action
+- parsing of open and in-progress Markdown task lines from the active note
+- exclusion of tasks already inside the configured planner heading so reruns replace generated output instead of re-parsing it as source input
+- preservation of nested open subtasks beneath scheduled parent tasks in generated output
+- duration marker parsing for `[30m]` and `@30m`, with marker text preserved in generated task lines
+- priority ordering for active-note tasks using Obsidian Tasks priority markers from highest to lowest, with unmarked tasks between medium and low priority
+- generation of sequential time blocks under a configurable heading in the current note, snapped to the configured interval and limited by the configured work day
 
 Before implementing new behavior:
 
-- verify whether the current code is scaffold-only or already meaningful
+- verify whether the current code already covers part of the requested behavior before adding new logic
 - align naming with the Automatic Time Blocking domain instead of sample-plugin placeholders
 - keep README and agent guidance accurate to the real implementation state
 
