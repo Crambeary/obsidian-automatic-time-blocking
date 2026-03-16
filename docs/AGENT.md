@@ -17,10 +17,12 @@ When contributing here, optimize for the intended product direction rather than 
 The intended plugin behavior is:
 
 - read tasks from configured sources
+- prefer indexed discovery for external task sources when available so multi-note intake stays fast
 - start with Obsidian Tasks support
 - support task intake from the current daily note
 - support task intake from Kanban notes as the product evolves
 - focus on open and in-progress work
+- use explicit task date signals for external sources, especially scheduled and due dates aligned with the planning note date
 - support duration markers on tasks
 - write generated time blocks into a configurable heading in the daily note
 - for the current prototype, follow a NotePlan-like rerun model where generated time blocks are treated as output, not as an authoritative task source on the next run
@@ -90,7 +92,7 @@ Ask before doing any of the following:
 If you are asked to work on product features, prioritize these areas first:
 
 1. real settings page and persisted plugin settings
-2. task-source selection and filtering for open / in-progress items
+2. fast task-source discovery and filtering for open / in-progress items
 3. duration marker parsing
 4. writing time blocks into the daily note under a configurable heading
 5. preserving task emojis where practical
@@ -104,8 +106,17 @@ Treat these as the main expected sources unless the user says otherwise:
 - Obsidian Tasks-managed tasks
 - tasks already present in the current daily note
 - tasks represented in Kanban notes
+- externally discovered tasks found through Dataview when available, with a scoped folder-or-file fallback when it is not
 
 When implementing source support, prefer explicit filtering rules over implicit guesses.
+
+For external-note discovery, prefer this order unless the user says otherwise:
+
+- use Dataview as the preferred discovery path when it is installed and can provide indexed task lookup
+- avoid full-vault scans during normal command execution
+- provide plugin-managed selection of a limited set of folders or files as the fallback source scope
+- use Tasks-style scheduled and due dates as the first inclusion rule for matching a task to the planning note date
+- preserve source metadata so future generated lines can link back to the original task location
 
 For the current active-note prototype, tasks under the configured planner heading should be treated as generated output and excluded from source-task intake so reruns rebuild the plan from the underlying task list.
 

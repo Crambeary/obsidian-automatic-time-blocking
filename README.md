@@ -63,9 +63,11 @@ This project is heavily inspired by the NotePlan Auto Time Blocking workflow, bu
 The first meaningful version is expected to focus on a small, opinionated core:
 
 - read tasks from configured sources
+- prefer indexed external-task discovery when available so cross-note task intake stays fast
 - support a settings page immediately
 - support duration markers on tasks
 - target only tasks that are open or in progress
+- filter external tasks by the active planning date using task scheduled and due dates
 - insert generated time blocks into the daily note under a configurable heading
 - maintain compatibility with Day Planner output expectations
 - preserve task emoji metadata where possible
@@ -77,6 +79,14 @@ The expected task intake model currently includes:
 - tasks managed with the Obsidian Tasks plugin
 - tasks already written into the current day note so they can still be rearranged manually
 - tasks stored in a Kanban note, with support focused on actionable items such as open or in-progress work
+- indexed cross-note task discovery via Dataview when available, with a scoped file-or-folder fallback when it is not
+
+The current intended direction for external-note discovery is:
+
+- use Dataview as the preferred discovery path when it is installed, so multi-note task discovery can stay fast
+- provide a plugin-managed fallback where users can select a limited set of folders or files instead of scanning the whole vault
+- use Tasks-style scheduled and due dates to decide whether an external task belongs to the active planning date
+- preserve enough source metadata to support future links back to the original task location
 
 Exact parsing and prioritization rules are still being designed.
 
