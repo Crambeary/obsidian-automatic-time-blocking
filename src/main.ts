@@ -53,6 +53,8 @@ interface CalendarEventDiagnostic {
   reason: string;
 }
 
+type AutomaticStartMode = "snapped" | "now";
+
 const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
   highest: 6,
   high: 5,
@@ -69,6 +71,9 @@ interface ObsidianAutomaticTimeBlockingSettings {
   workDayEndTime: string;
   defaultDurationMinutes: number;
   startIntervalMinutes: number;
+  automaticStartMode: AutomaticStartMode;
+  splitTasksAcrossGaps: boolean;
+  breakDurationMinutes: number;
   remoteCalendarUrls: string[];
   ignoredCalendarEventPatterns: string;
 }
@@ -80,6 +85,9 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   workDayEndTime: "17:00",
   defaultDurationMinutes: 30,
   startIntervalMinutes: 15,
+  automaticStartMode: "snapped",
+  splitTasksAcrossGaps: false,
+  breakDurationMinutes: 0,
   remoteCalendarUrls: [],
   ignoredCalendarEventPatterns: "",
 };
@@ -103,6 +111,11 @@ interface GeneratedTimeBlocks {
   unscheduledLines: string[];
   scheduledTaskCount: number;
   skippedTaskCount: number;
+}
+
+interface ScheduledTaskSegment {
+  startMinutes: number;
+  endMinutes: number;
 }
 
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
@@ -404,6 +417,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       this.settings.dayStartTime,
     );
     const workDayEndMinutes = this.getWorkDayEndMinutes();
+    const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
     let skippedTaskCount = 0;
     const occupiedRanges = this.normalizeTimeRanges([
       ...busyRanges,
@@ -437,44 +451,42 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       );
       this.insertTimeRange(occupiedRanges, {
         startMinutes: manualStartMinutes,
-        endMinutes,
+        endMinutes: endMinutes + breakDurationMinutes,
       });
-      currentAutomaticStartMinutes = Math.max(
-        currentAutomaticStartMinutes,
-        endMinutes,
-      );
     }
 
     for (const task of automaticTasks) {
-      const proposedStartMinutes = this.findNextAvailableStartMinutes(
+      const scheduledSegments = this.scheduleAutomaticTaskSegments(
+        task,
         currentAutomaticStartMinutes,
-        task.durationMinutes,
         occupiedRanges,
         workDayEndMinutes,
       );
-      const endMinutes = proposedStartMinutes + task.durationMinutes;
 
-      if (
-        proposedStartMinutes >= workDayEndMinutes ||
-        endMinutes > workDayEndMinutes
-      ) {
+      if (scheduledSegments === null || scheduledSegments.length === 0) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
 
       scheduledTaskCount += 1;
-      scheduledLines.push(
-        ...this.buildRenderedTaskLines(
-          task,
-          `${this.formatMinutesAsTime(proposedStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
-        ),
-      );
-      this.insertTimeRange(occupiedRanges, {
-        startMinutes: proposedStartMinutes,
-        endMinutes,
-      });
-      currentAutomaticStartMinutes = endMinutes;
+      for (const [
+        segmentIndex,
+        scheduledSegment,
+      ] of scheduledSegments.entries()) {
+        const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
+        if (segmentIndex === 0) {
+          scheduledLines.push(...this.buildRenderedTaskLines(task, prefix));
+          continue;
+        }
+
+        scheduledLines.push(`- [ ] ${prefix}${task.text}`);
+      }
+
+      const finalScheduledSegment =
+        scheduledSegments[scheduledSegments.length - 1];
+      currentAutomaticStartMinutes =
+        finalScheduledSegment.endMinutes + breakDurationMinutes;
     }
 
     return {
@@ -535,9 +547,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const snappedCurrentMinutes = this.snapMinutesToInterval(currentMinutes);
+    const startingMinutes =
+      this.getAutomaticStartMode() === "now"
+        ? currentMinutes
+        : this.snapMinutesToInterval(currentMinutes);
 
-    return Math.max(configuredStartMinutes, snappedCurrentMinutes);
+    return Math.max(configuredStartMinutes, startingMinutes);
   }
 
   private getWorkDayEndMinutes(): number {
@@ -566,6 +581,20 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return interval;
+  }
+
+  private getAutomaticStartMode(): AutomaticStartMode {
+    return this.settings.automaticStartMode === "now" ? "now" : "snapped";
+  }
+
+  private getValidatedBreakDurationMinutes(): number {
+    const breakDuration = Math.floor(this.settings.breakDurationMinutes);
+
+    if (!Number.isFinite(breakDuration) || breakDuration < 0) {
+      return DEFAULT_SETTINGS.breakDurationMinutes;
+    }
+
+    return breakDuration;
   }
 
   private normalizeTimeRanges(ranges: TimeRange[]): TimeRange[] {
@@ -618,7 +647,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     occupiedRanges: TimeRange[],
     workDayEndMinutes: number,
   ): number {
-    let nextStartMinutes = this.snapMinutesToInterval(proposedStartMinutes);
+    let nextStartMinutes = proposedStartMinutes;
 
     while (nextStartMinutes < workDayEndMinutes) {
       const candidateEndMinutes = nextStartMinutes + durationMinutes;
@@ -638,6 +667,133 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return workDayEndMinutes;
+  }
+
+  private findNextAvailableWindow(
+    proposedStartMinutes: number,
+    occupiedRanges: TimeRange[],
+    workDayEndMinutes: number,
+  ): TimeRange {
+    let nextStartMinutes = proposedStartMinutes;
+
+    while (nextStartMinutes < workDayEndMinutes) {
+      const containingRange = occupiedRanges.find(
+        (occupiedRange) =>
+          nextStartMinutes >= occupiedRange.startMinutes &&
+          nextStartMinutes < occupiedRange.endMinutes,
+      );
+
+      if (containingRange) {
+        nextStartMinutes = this.snapMinutesToInterval(
+          containingRange.endMinutes,
+        );
+        continue;
+      }
+
+      const nextOccupiedRange = occupiedRanges.find(
+        (occupiedRange) => occupiedRange.startMinutes > nextStartMinutes,
+      );
+
+      return {
+        startMinutes: nextStartMinutes,
+        endMinutes: Math.min(
+          nextOccupiedRange?.startMinutes ?? workDayEndMinutes,
+          workDayEndMinutes,
+        ),
+      };
+    }
+
+    return {
+      startMinutes: workDayEndMinutes,
+      endMinutes: workDayEndMinutes,
+    };
+  }
+
+  private scheduleAutomaticTaskSegments(
+    task: ParsedTask,
+    proposedStartMinutes: number,
+    occupiedRanges: TimeRange[],
+    workDayEndMinutes: number,
+  ): ScheduledTaskSegment[] | null {
+    const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
+
+    if (!this.settings.splitTasksAcrossGaps) {
+      const scheduledStartMinutes = this.findNextAvailableStartMinutes(
+        proposedStartMinutes,
+        task.durationMinutes,
+        occupiedRanges,
+        workDayEndMinutes,
+      );
+      const scheduledEndMinutes = scheduledStartMinutes + task.durationMinutes;
+
+      if (
+        scheduledStartMinutes >= workDayEndMinutes ||
+        scheduledEndMinutes > workDayEndMinutes
+      ) {
+        return null;
+      }
+
+      this.insertTimeRange(occupiedRanges, {
+        startMinutes: scheduledStartMinutes,
+        endMinutes: scheduledEndMinutes + breakDurationMinutes,
+      });
+
+      return [
+        {
+          startMinutes: scheduledStartMinutes,
+          endMinutes: scheduledEndMinutes,
+        },
+      ];
+    }
+
+    const candidateOccupiedRanges = occupiedRanges.map((range) => ({
+      ...range,
+    }));
+    const scheduledSegments: ScheduledTaskSegment[] = [];
+    let remainingDurationMinutes = task.durationMinutes;
+    let nextProposedStartMinutes = proposedStartMinutes;
+
+    while (remainingDurationMinutes > 0) {
+      const availableWindow = this.findNextAvailableWindow(
+        nextProposedStartMinutes,
+        candidateOccupiedRanges,
+        workDayEndMinutes,
+      );
+
+      if (availableWindow.endMinutes <= availableWindow.startMinutes) {
+        return null;
+      }
+
+      const availableDurationMinutes =
+        availableWindow.endMinutes - availableWindow.startMinutes;
+
+      if (availableDurationMinutes <= 0) {
+        return null;
+      }
+
+      const scheduledDurationMinutes = Math.min(
+        remainingDurationMinutes,
+        availableDurationMinutes,
+      );
+      const scheduledSegment: ScheduledTaskSegment = {
+        startMinutes: availableWindow.startMinutes,
+        endMinutes: availableWindow.startMinutes + scheduledDurationMinutes,
+      };
+
+      scheduledSegments.push(scheduledSegment);
+      this.insertTimeRange(candidateOccupiedRanges, scheduledSegment);
+      remainingDurationMinutes -= scheduledDurationMinutes;
+      nextProposedStartMinutes = scheduledSegment.endMinutes;
+    }
+
+    const finalScheduledSegment =
+      scheduledSegments[scheduledSegments.length - 1];
+    this.insertTimeRange(candidateOccupiedRanges, {
+      startMinutes: finalScheduledSegment.endMinutes,
+      endMinutes: finalScheduledSegment.endMinutes + breakDurationMinutes,
+    });
+    occupiedRanges.splice(0, occupiedRanges.length, ...candidateOccupiedRanges);
+    return scheduledSegments;
   }
 
   private parseManualStartMinutes(taskText: string): number | null {
@@ -1644,6 +1800,22 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Automatic start mode")
+      .setDesc(
+        "Choose whether automatic scheduling starts at the current time exactly or at the next snapped interval boundary.",
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("snapped", "Nearest snapped time")
+          .addOption("now", "Current time")
+          .setValue(this.plugin.settings.automaticStartMode)
+          .onChange(async (value: AutomaticStartMode) => {
+            this.plugin.settings.automaticStartMode = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Planner heading text")
       .setDesc(
         `Matches Day Planner's heading title setting. Generated time blocks will be written under ${"#".repeat(this.plugin.settings.plannerHeadingLevel)} ${this.plugin.settings.plannerHeading}. If that heading already exists in the active note, its section is replaced. Otherwise, the heading is appended to the end of the note.`,
@@ -1662,7 +1834,7 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Day start time")
       .setDesc(
-        "Time used for the first generated block in HH:MM 24-hour format. The plugin starts no earlier than this setting and no earlier than the current time.",
+        "Earliest automatic scheduling time in HH:MM 24-hour format. Automatic scheduling starts no earlier than this setting.",
       )
       .addText((text) =>
         text
@@ -1725,6 +1897,39 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
               Number.isFinite(parsedValue) && parsedValue > 0
                 ? parsedValue
                 : DEFAULT_SETTINGS.startIntervalMinutes;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Split tasks across gaps")
+      .setDesc(
+        "Allow automatic scheduling to split a task into multiple time blocks when that helps it fit around busy time and existing scheduled blocks.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.splitTasksAcrossGaps)
+          .onChange(async (value) => {
+            this.plugin.settings.splitTasksAcrossGaps = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Break between time blocks")
+      .setDesc(
+        "Minutes of buffer to reserve after each generated time block before the next generated block can begin.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("0")
+          .setValue(String(this.plugin.settings.breakDurationMinutes))
+          .onChange(async (value) => {
+            const parsedValue = Number(value);
+            this.plugin.settings.breakDurationMinutes =
+              Number.isFinite(parsedValue) && parsedValue >= 0
+                ? parsedValue
+                : DEFAULT_SETTINGS.breakDurationMinutes;
             await this.plugin.saveSettings();
           }),
       );

@@ -14,7 +14,7 @@ The plugin files now live at the repository root rather than inside a nested `ob
 
 What is implemented today:
 
-- a settings tab for output heading, day start time, work day end time, start interval, and default duration
+- a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, and break duration between generated blocks
 - a command named `Generate time blocks from active note`
 - parsing of open or in-progress Markdown task lines from the active note
 - NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
@@ -25,7 +25,9 @@ What is implemented today:
 - ordering of active-note tasks by Obsidian Tasks priority markers before generating blocks, using `🔺`, `⏫`, `🔼`, no marker, `🔽`, and `⏬` from highest to lowest
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
 - generated output written under a configurable heading in the current note
-- generated blocks snapped to a configurable minute interval and limited to the configured work day
+- generated blocks limited to the configured work day, with automatic scheduling able to either start at the next snapped interval or immediately from the current time
+- optional splitting of automatically scheduled tasks across multiple free gaps in the day
+- optional break buffers between generated blocks
 - optional plugin-owned remote calendars that are treated as busy time during scheduling
 - optional ignored calendar event patterns, matched case-insensitively against event titles, so selected recurring calendar events do not block scheduling
 - grouped Remote Calendar settings with an `Add remote calendar` button for managing more than one internet calendar feed
@@ -126,7 +128,7 @@ Implemented today:
 - parsing of explicit task start times such as `13:00`, with those manual times taking precedence over priority-based scheduling
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
 - generation of simple sequential time blocks into a configurable heading
-- configurable work-day bounds and start-interval snapping for generated blocks
+- configurable work-day bounds, automatic start behavior, optional split scheduling across gaps, optional breaks between generated blocks, and start-interval snapping for generated blocks
 - optional avoidance of busy windows from configured remote calendars
 - optional event-title ignore patterns for calendar events you do not want to block around
 - remote calendars are configured in grouped settings rows, with an `Add remote calendar` button similar to the Day Planner-style internet calendar setup flow
@@ -150,7 +152,10 @@ Current behavior:
 - `13:00` sets the start time for that task in 24-hour format
 - if a task has a manual start time but no duration marker, the plugin uses the configured default duration
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
-- tasks without a manual start time are still scheduled automatically using the existing priority ordering and interval snapping rules
+- tasks without a manual start time are still scheduled automatically using the existing priority ordering rules
+- automatic scheduling can either begin at the next snapped interval boundary or at the current time, based on settings
+- when enabled, automatic scheduling can split a task across multiple open gaps instead of skipping it when one continuous slot is unavailable
+- when enabled, a break buffer is reserved after each generated block before another generated block can begin
 - if remote calendars are configured, generated tasks avoid overlapping matching calendar events on the planning day
 
 Current calendar limitations:
