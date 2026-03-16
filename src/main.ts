@@ -1,13 +1,57 @@
 import {
   App,
   MarkdownView,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
+  requestUrl,
   Setting,
 } from "obsidian";
+import moment from "moment";
+import { tz } from "moment-timezone";
+import * as ical from "node-ical";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
+
+interface TimeRange {
+  startMinutes: number;
+  endMinutes: number;
+}
+
+interface CalendarBusyRange extends TimeRange {
+  summary: string;
+  uid: string;
+}
+
+interface ParsedIcsEvent {
+  uid: string;
+  summary: string;
+  start: Date;
+  end: Date;
+  recurrenceRule: string | null;
+  recurrenceId: Date | null;
+  exceptionDates: Date[];
+}
+
+interface CalendarPreviewData {
+  matchedEvents: CalendarBusyRange[];
+  busyRanges: CalendarBusyRange[];
+  failedCalendarCount: number;
+  loadedCalendarCount: number;
+  planningDate: Date;
+  eventDiagnostics: CalendarEventDiagnostic[];
+}
+
+interface CalendarEventDiagnostic {
+  summary: string;
+  uid: string;
+  startText: string;
+  endText: string;
+  recurrenceRule: string | null;
+  included: boolean;
+  reason: string;
+}
 
 const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
   highest: 6,
@@ -25,7 +69,10 @@ interface ObsidianAutomaticTimeBlockingSettings {
   workDayEndTime: string;
   defaultDurationMinutes: number;
   startIntervalMinutes: number;
+  remoteCalendarUrls: string[];
+  ignoredCalendarEventPatterns: string;
 }
+
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   plannerHeading: "Time Blocks",
   plannerHeadingLevel: 2,
@@ -33,9 +80,12 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   workDayEndTime: "17:00",
   defaultDurationMinutes: 30,
   startIntervalMinutes: 15,
+  remoteCalendarUrls: [],
+  ignoredCalendarEventPatterns: "",
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
+  calendarIcsUrls?: string;
   outputHeading?: string;
 }
 
@@ -55,15 +105,9 @@ interface GeneratedTimeBlocks {
   skippedTaskCount: number;
 }
 
-interface AutomaticSchedulingResult {
-  nextAutomaticTaskIndex: number;
-  nextAutomaticStartMinutes: number;
-  scheduledTaskCount: number;
-  skippedTaskCount: number;
-}
-
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
+  calendarPreviewCache = new Map<string, CalendarPreviewData>();
 
   async onload() {
     await this.loadSettings();
@@ -89,6 +133,31 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       void this.generateTimeBlocksForActiveNote();
     });
 
+    this.addCommand({
+      id: "refresh-busy-calendars",
+      name: "Refresh busy calendars",
+      callback: () => {
+        void this.refreshBusyCalendarsForActiveNote();
+      },
+    });
+
+    this.addCommand({
+      id: "preview-busy-calendars-for-active-note",
+      name: "Preview busy calendars for active note",
+      checkCallback: (checking: boolean) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file) {
+          return false;
+        }
+
+        if (!checking) {
+          void this.previewBusyCalendarsForActiveNote();
+        }
+
+        return true;
+      },
+    });
+
     this.addSettingTab(new AutomaticTimeBlockingSettingTab(this.app, this));
   }
 
@@ -100,6 +169,20 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData ?? {});
 
+    if (!Array.isArray(this.settings.remoteCalendarUrls)) {
+      this.settings.remoteCalendarUrls = [];
+    }
+
+    if (
+      this.settings.remoteCalendarUrls.length === 0 &&
+      typeof loadedData?.calendarIcsUrls === "string"
+    ) {
+      this.settings.remoteCalendarUrls = loadedData.calendarIcsUrls
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    }
+
     if (!this.settings.plannerHeading && loadedData?.outputHeading) {
       this.settings.plannerHeading = loadedData.outputHeading;
     }
@@ -107,6 +190,34 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  async refreshBusyCalendarsForActiveNote(): Promise<void> {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const planningDate = activeView?.file
+      ? this.resolvePlanningDate(activeView.file.basename)
+      : this.getTodayDate();
+    const previewData = await this.getCalendarPreviewData(planningDate, true);
+
+    const loadedCount = previewData.loadedCalendarCount;
+    const failedCount = previewData.failedCalendarCount;
+    const eventCount = previewData.busyRanges.length;
+
+    new Notice(
+      `Refreshed ${loadedCount} remote calendar${loadedCount === 1 ? "" : "s"}; found ${eventCount} busy event${eventCount === 1 ? "" : "s"}.${failedCount > 0 ? ` ${failedCount} calendar${failedCount === 1 ? "" : "s"} failed to load.` : ""}`,
+    );
+  }
+
+  async previewBusyCalendarsForActiveNote(): Promise<void> {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || !activeView.file) {
+      new Notice("Open a Markdown note to preview busy calendars.");
+      return;
+    }
+
+    const planningDate = this.resolvePlanningDate(activeView.file.basename);
+    const previewData = await this.getCalendarPreviewData(planningDate, false);
+    new CalendarPreviewModal(this.app, previewData).open();
   }
 
   private async generateTimeBlocksForActiveNote() {
@@ -118,13 +229,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const content = await this.app.vault.cachedRead(view.file);
     const tasks = this.extractOpenTasks(content);
+    const planningDate = this.resolvePlanningDate(view.file.basename);
 
     if (tasks.length === 0) {
       new Notice("No open or in-progress tasks found in the active note.");
       return;
     }
 
-    const generatedTimeBlocks = this.buildTimeBlockLines(tasks);
+    const { busyRanges, failedCalendarCount } =
+      await this.getCalendarPreviewData(planningDate, false);
+    const generatedTimeBlocks = this.buildTimeBlockLines(tasks, busyRanges);
 
     if (generatedTimeBlocks.scheduledLines.length === 0) {
       new Notice(
@@ -150,9 +264,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       skippedCount > 0
         ? ` Skipped ${skippedCount} task${skippedCount === 1 ? "" : "s"} that would exceed the configured work day.`
         : "";
+    const calendarSuffix =
+      failedCalendarCount > 0
+        ? ` ${failedCalendarCount} calendar feed${failedCalendarCount === 1 ? "" : "s"} could not be loaded.`
+        : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}`,
     );
   }
 
@@ -264,7 +382,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       .trim();
   }
 
-  private buildTimeBlockLines(tasks: ParsedTask[]): GeneratedTimeBlocks {
+  private buildTimeBlockLines(
+    tasks: ParsedTask[],
+    busyRanges: TimeRange[],
+  ): GeneratedTimeBlocks {
     const scheduledLines: string[] = [];
     const unscheduledLines: string[] = [];
     let scheduledTaskCount = 0;
@@ -278,36 +399,29 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           (leftTask.manualStartMinutes ?? 0) -
           (rightTask.manualStartMinutes ?? 0),
       );
-    let automaticTaskIndex = 0;
     let currentAutomaticStartMinutes = this.getInitialStartMinutes();
     const configuredDayStartMinutes = this.parseTimeToMinutes(
       this.settings.dayStartTime,
     );
     const workDayEndMinutes = this.getWorkDayEndMinutes();
     let skippedTaskCount = 0;
+    const occupiedRanges = this.normalizeTimeRanges([
+      ...busyRanges,
+      { startMinutes: 0, endMinutes: configuredDayStartMinutes },
+      { startMinutes: workDayEndMinutes, endMinutes: 1440 },
+    ]);
 
     for (const task of manuallyTimedTasks) {
       const manualStartMinutes = task.manualStartMinutes ?? 0;
-      const automaticSchedulingResult = this.scheduleAutomaticTasksUntil(
-        automaticTasks,
-        automaticTaskIndex,
-        currentAutomaticStartMinutes,
-        Math.min(manualStartMinutes, workDayEndMinutes),
-        workDayEndMinutes,
-        scheduledLines,
-        unscheduledLines,
-      );
-      automaticTaskIndex = automaticSchedulingResult.nextAutomaticTaskIndex;
-      currentAutomaticStartMinutes =
-        automaticSchedulingResult.nextAutomaticStartMinutes;
-      scheduledTaskCount += automaticSchedulingResult.scheduledTaskCount;
-      skippedTaskCount += automaticSchedulingResult.skippedTaskCount;
-
       const endMinutes = manualStartMinutes + task.durationMinutes;
       if (
         manualStartMinutes < configuredDayStartMinutes ||
         manualStartMinutes >= workDayEndMinutes ||
-        endMinutes > workDayEndMinutes
+        endMinutes > workDayEndMinutes ||
+        this.timeRangeOverlaps(
+          { startMinutes: manualStartMinutes, endMinutes },
+          occupiedRanges,
+        )
       ) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
@@ -321,86 +435,51 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           `${this.formatMinutesAsTime(manualStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
         ),
       );
+      this.insertTimeRange(occupiedRanges, {
+        startMinutes: manualStartMinutes,
+        endMinutes,
+      });
       currentAutomaticStartMinutes = Math.max(
         currentAutomaticStartMinutes,
         endMinutes,
       );
     }
 
-    const remainingAutomaticSchedulingResult = this.scheduleAutomaticTasksUntil(
-      automaticTasks,
-      automaticTaskIndex,
-      currentAutomaticStartMinutes,
-      workDayEndMinutes,
-      workDayEndMinutes,
-      scheduledLines,
-      unscheduledLines,
-    );
-    scheduledTaskCount += remainingAutomaticSchedulingResult.scheduledTaskCount;
-    skippedTaskCount += remainingAutomaticSchedulingResult.skippedTaskCount;
-
-    return {
-      scheduledLines,
-      unscheduledLines,
-      scheduledTaskCount,
-      skippedTaskCount,
-    };
-  }
-
-  private scheduleAutomaticTasksUntil(
-    automaticTasks: ParsedTask[],
-    startIndex: number,
-    startMinutes: number,
-    stopBeforeMinutes: number,
-    workDayEndMinutes: number,
-    scheduledLines: string[],
-    unscheduledLines: string[],
-  ): AutomaticSchedulingResult {
-    let nextAutomaticTaskIndex = startIndex;
-    let nextAutomaticStartMinutes = startMinutes;
-    let scheduledTaskCount = 0;
-    let skippedTaskCount = 0;
-
-    while (nextAutomaticTaskIndex < automaticTasks.length) {
-      nextAutomaticStartMinutes = this.snapMinutesToInterval(
-        nextAutomaticStartMinutes,
+    for (const task of automaticTasks) {
+      const proposedStartMinutes = this.findNextAvailableStartMinutes(
+        currentAutomaticStartMinutes,
+        task.durationMinutes,
+        occupiedRanges,
+        workDayEndMinutes,
       );
+      const endMinutes = proposedStartMinutes + task.durationMinutes;
 
       if (
-        nextAutomaticStartMinutes >= workDayEndMinutes ||
-        nextAutomaticStartMinutes >= stopBeforeMinutes
+        proposedStartMinutes >= workDayEndMinutes ||
+        endMinutes > workDayEndMinutes
       ) {
-        break;
-      }
-
-      const task = automaticTasks[nextAutomaticTaskIndex];
-      const endMinutes = nextAutomaticStartMinutes + task.durationMinutes;
-
-      if (endMinutes > workDayEndMinutes) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
-        nextAutomaticTaskIndex += 1;
         continue;
-      }
-
-      if (endMinutes > stopBeforeMinutes) {
-        break;
       }
 
       scheduledTaskCount += 1;
       scheduledLines.push(
         ...this.buildRenderedTaskLines(
           task,
-          `${this.formatMinutesAsTime(nextAutomaticStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
+          `${this.formatMinutesAsTime(proposedStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
         ),
       );
-      nextAutomaticStartMinutes = endMinutes;
-      nextAutomaticTaskIndex += 1;
+      this.insertTimeRange(occupiedRanges, {
+        startMinutes: proposedStartMinutes,
+        endMinutes,
+      });
+      currentAutomaticStartMinutes = endMinutes;
     }
 
     return {
-      nextAutomaticTaskIndex,
-      nextAutomaticStartMinutes,
+      scheduledLines,
+      unscheduledLines,
       scheduledTaskCount,
       skippedTaskCount,
     };
@@ -489,6 +568,78 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return interval;
   }
 
+  private normalizeTimeRanges(ranges: TimeRange[]): TimeRange[] {
+    const sortedRanges = ranges
+      .filter((range) => range.endMinutes > range.startMinutes)
+      .sort(
+        (leftRange, rightRange) =>
+          leftRange.startMinutes - rightRange.startMinutes,
+      );
+    const mergedRanges: TimeRange[] = [];
+
+    for (const range of sortedRanges) {
+      const previousRange = mergedRanges[mergedRanges.length - 1];
+      if (!previousRange || range.startMinutes > previousRange.endMinutes) {
+        mergedRanges.push({ ...range });
+        continue;
+      }
+
+      previousRange.endMinutes = Math.max(
+        previousRange.endMinutes,
+        range.endMinutes,
+      );
+    }
+
+    return mergedRanges;
+  }
+
+  private insertTimeRange(ranges: TimeRange[], rangeToInsert: TimeRange): void {
+    const normalizedRanges = this.normalizeTimeRanges([
+      ...ranges,
+      rangeToInsert,
+    ]);
+    ranges.splice(0, ranges.length, ...normalizedRanges);
+  }
+
+  private timeRangeOverlaps(
+    range: TimeRange,
+    occupiedRanges: TimeRange[],
+  ): boolean {
+    return occupiedRanges.some(
+      (occupiedRange) =>
+        range.startMinutes < occupiedRange.endMinutes &&
+        range.endMinutes > occupiedRange.startMinutes,
+    );
+  }
+
+  private findNextAvailableStartMinutes(
+    proposedStartMinutes: number,
+    durationMinutes: number,
+    occupiedRanges: TimeRange[],
+    workDayEndMinutes: number,
+  ): number {
+    let nextStartMinutes = this.snapMinutesToInterval(proposedStartMinutes);
+
+    while (nextStartMinutes < workDayEndMinutes) {
+      const candidateEndMinutes = nextStartMinutes + durationMinutes;
+      const overlappingRange = occupiedRanges.find(
+        (occupiedRange) =>
+          nextStartMinutes < occupiedRange.endMinutes &&
+          candidateEndMinutes > occupiedRange.startMinutes,
+      );
+
+      if (!overlappingRange) {
+        return nextStartMinutes;
+      }
+
+      nextStartMinutes = this.snapMinutesToInterval(
+        overlappingRange.endMinutes,
+      );
+    }
+
+    return workDayEndMinutes;
+  }
+
   private parseManualStartMinutes(taskText: string): number | null {
     const timeMatch = taskText.match(/(?:^|\s)(\d{1,2}:\d{2})(?=\s|$)/);
     if (!timeMatch) {
@@ -529,6 +680,820 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const hours = Math.floor(normalizedMinutes / 60);
     const minutes = normalizedMinutes % 60;
     return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+  }
+
+  private resolvePlanningDate(fileBasename: string): Date {
+    const hyphenatedDateMatch = fileBasename.match(
+      /\b(\d{4})-(\d{2})-(\d{2})\b/,
+    );
+    if (hyphenatedDateMatch) {
+      return new Date(
+        Number(hyphenatedDateMatch[1]),
+        Number(hyphenatedDateMatch[2]) - 1,
+        Number(hyphenatedDateMatch[3]),
+      );
+    }
+
+    const compactDateMatch = fileBasename.match(/\b(\d{4})(\d{2})(\d{2})\b/);
+    if (compactDateMatch) {
+      return new Date(
+        Number(compactDateMatch[1]),
+        Number(compactDateMatch[2]) - 1,
+        Number(compactDateMatch[3]),
+      );
+    }
+
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  }
+
+  private getTodayDate(): Date {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  }
+
+  normalizeRemoteCalendarUrl(value: string): string {
+    return value.trim().replace(/^webcal:\/\//i, "https://");
+  }
+
+  private getCalendarCacheKey(planningDate: Date): string {
+    return [
+      this.formatDateKey(planningDate),
+      this.settings.remoteCalendarUrls.join("\n"),
+      this.settings.ignoredCalendarEventPatterns,
+    ].join("::");
+  }
+
+  private async getCalendarPreviewData(
+    planningDate: Date,
+    forceRefresh: boolean,
+  ): Promise<CalendarPreviewData> {
+    const cacheKey = this.getCalendarCacheKey(planningDate);
+    if (!forceRefresh) {
+      const cachedPreviewData = this.calendarPreviewCache.get(cacheKey);
+      if (cachedPreviewData) {
+        return cachedPreviewData;
+      }
+    }
+
+    const previewData = await this.getBusyCalendarRangesForDate(planningDate);
+    const resolvedPreviewData: CalendarPreviewData = {
+      ...previewData,
+      planningDate,
+    };
+    this.calendarPreviewCache.set(cacheKey, resolvedPreviewData);
+    return resolvedPreviewData;
+  }
+
+  private async getBusyCalendarRangesForDate(planningDate: Date): Promise<{
+    matchedEvents: CalendarBusyRange[];
+    busyRanges: CalendarBusyRange[];
+    failedCalendarCount: number;
+    loadedCalendarCount: number;
+    eventDiagnostics: CalendarEventDiagnostic[];
+  }> {
+    const remoteCalendars = this.settings.remoteCalendarUrls
+      .map((calendarUrl) => this.normalizeRemoteCalendarUrl(calendarUrl))
+      .filter((calendarUrl) => calendarUrl.length > 0);
+
+    if (remoteCalendars.length === 0) {
+      return {
+        matchedEvents: [],
+        busyRanges: [],
+        failedCalendarCount: 0,
+        loadedCalendarCount: 0,
+        eventDiagnostics: [],
+      };
+    }
+
+    const matchedEvents: CalendarBusyRange[] = [];
+    const eventDiagnostics: CalendarEventDiagnostic[] = [];
+    let failedCalendarCount = 0;
+    let loadedCalendarCount = 0;
+
+    for (const calendarUrl of remoteCalendars) {
+      try {
+        const response = await requestUrl({
+          url: calendarUrl,
+          method: "GET",
+        });
+        if (response.status < 200 || response.status >= 300) {
+          throw new Error(
+            `Calendar request failed with status ${response.status}`,
+          );
+        }
+
+        const rawCalendar = response.text;
+        const extractionResult = this.extractBusyRangesFromIcs(
+          rawCalendar,
+          planningDate,
+        );
+        matchedEvents.push(...extractionResult.busyRanges);
+        eventDiagnostics.push(...extractionResult.eventDiagnostics);
+        loadedCalendarCount += 1;
+      } catch (error) {
+        console.error("Failed to load ICS calendar", calendarUrl, error);
+        failedCalendarCount += 1;
+      }
+    }
+
+    return {
+      matchedEvents,
+      busyRanges: this.normalizeCalendarBusyRanges(matchedEvents),
+      failedCalendarCount,
+      loadedCalendarCount,
+      eventDiagnostics,
+    };
+  }
+
+  private extractBusyRangesFromIcs(
+    rawCalendar: string,
+    planningDate: Date,
+  ): {
+    busyRanges: CalendarBusyRange[];
+    eventDiagnostics: CalendarEventDiagnostic[];
+  } {
+    const dayStart = new Date(
+      planningDate.getFullYear(),
+      planningDate.getMonth(),
+      planningDate.getDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const calendarEntries = Object.values(
+      ical.sync.parseICS(rawCalendar) as Record<string, any>,
+    );
+    const busyRanges: CalendarBusyRange[] = [];
+    const eventDiagnostics: CalendarEventDiagnostic[] = [];
+
+    for (const calendarEntry of calendarEntries) {
+      if (!calendarEntry || calendarEntry.type !== "VEVENT") {
+        continue;
+      }
+
+      const summary = String(calendarEntry.summary ?? "Untitled event");
+      const uid = String(calendarEntry.uid ?? "");
+      const startDate =
+        calendarEntry.start instanceof Date
+          ? calendarEntry.start
+          : new Date(calendarEntry.start ?? Number.NaN);
+      const endDate =
+        calendarEntry.end instanceof Date
+          ? calendarEntry.end
+          : new Date(calendarEntry.end ?? Number.NaN);
+
+      if (this.shouldIgnoreCalendarEvent(summary)) {
+        eventDiagnostics.push(
+          this.buildCalendarEventDiagnostic(
+            summary,
+            uid,
+            startDate,
+            endDate,
+            calendarEntry.rrule?.toString?.() ?? null,
+            false,
+            "Ignored by event pattern",
+          ),
+        );
+        continue;
+      }
+
+      if (
+        !Number.isFinite(startDate.getTime()) ||
+        !Number.isFinite(endDate.getTime())
+      ) {
+        eventDiagnostics.push(
+          this.buildCalendarEventDiagnostic(
+            summary,
+            uid,
+            startDate,
+            endDate,
+            calendarEntry.rrule?.toString?.() ?? null,
+            false,
+            "Invalid event date parse",
+          ),
+        );
+        continue;
+      }
+
+      const occurrenceRanges = this.expandNodeIcalEventOccurrencesForDay(
+        calendarEntry,
+        dayStart,
+        dayEnd,
+      );
+      if (occurrenceRanges.length === 0) {
+        eventDiagnostics.push(
+          this.buildCalendarEventDiagnostic(
+            summary,
+            uid,
+            startDate,
+            endDate,
+            calendarEntry.rrule?.toString?.() ?? null,
+            false,
+            "No occurrence on planning day",
+          ),
+        );
+        continue;
+      }
+
+      let includedOccurrence = false;
+      for (const occurrenceRange of occurrenceRanges) {
+        if (
+          occurrenceRange.end <= dayStart ||
+          occurrenceRange.start >= dayEnd
+        ) {
+          continue;
+        }
+
+        const clampedStart =
+          occurrenceRange.start < dayStart ? dayStart : occurrenceRange.start;
+        const clampedEnd =
+          occurrenceRange.end > dayEnd ? dayEnd : occurrenceRange.end;
+        const startMinutes =
+          clampedStart.getHours() * 60 + clampedStart.getMinutes();
+        const endMinutes = clampedEnd.getHours() * 60 + clampedEnd.getMinutes();
+
+        if (endMinutes <= startMinutes) {
+          continue;
+        }
+
+        busyRanges.push({
+          startMinutes,
+          endMinutes,
+          summary,
+          uid,
+        });
+        includedOccurrence = true;
+      }
+
+      eventDiagnostics.push(
+        this.buildCalendarEventDiagnostic(
+          summary,
+          uid,
+          startDate,
+          endDate,
+          calendarEntry.rrule?.toString?.() ?? null,
+          includedOccurrence,
+          includedOccurrence
+            ? "Included in busy calendar ranges"
+            : "Occurrence resolved outside visible day window",
+        ),
+      );
+    }
+
+    return {
+      busyRanges,
+      eventDiagnostics,
+    };
+  }
+
+  private expandNodeIcalEventOccurrencesForDay(
+    calendarEntry: any,
+    dayStart: Date,
+    dayEnd: Date,
+  ): Array<{ start: Date; end: Date }> {
+    const startDate =
+      calendarEntry.start instanceof Date
+        ? calendarEntry.start
+        : new Date(calendarEntry.start ?? Number.NaN);
+    const endDate =
+      calendarEntry.end instanceof Date
+        ? calendarEntry.end
+        : new Date(calendarEntry.end ?? Number.NaN);
+
+    if (
+      !Number.isFinite(startDate.getTime()) ||
+      !Number.isFinite(endDate.getTime())
+    ) {
+      return [];
+    }
+
+    if (calendarEntry.rrule?.between) {
+      const durationMilliseconds = Math.max(
+        endDate.getTime() - startDate.getTime(),
+        0,
+      );
+      const occurrenceStarts = calendarEntry.rrule.between(
+        dayStart,
+        new Date(dayEnd.getTime() + 24 * 60 * 60 * 1000),
+        true,
+      ) as Date[];
+      const occurrences: Array<{ start: Date; end: Date }> = [];
+
+      for (const occurrenceStart of occurrenceStarts) {
+        if (
+          this.nodeIcalHasExcludedOccurrence(calendarEntry, occurrenceStart)
+        ) {
+          continue;
+        }
+
+        const overrideOccurrence = this.findNodeIcalOverrideOccurrence(
+          calendarEntry,
+          occurrenceStart,
+        );
+        if (overrideOccurrence) {
+          occurrences.push(overrideOccurrence);
+          continue;
+        }
+
+        const adjustedOccurrenceStart = this.adjustNodeIcalOccurrenceStart(
+          calendarEntry,
+          occurrenceStart,
+        );
+        occurrences.push({
+          start: adjustedOccurrenceStart,
+          end: new Date(
+            adjustedOccurrenceStart.getTime() + durationMilliseconds,
+          ),
+        });
+      }
+
+      return occurrences;
+    }
+
+    return [{ start: startDate, end: endDate }];
+  }
+
+  private nodeIcalHasExcludedOccurrence(
+    calendarEntry: any,
+    occurrenceStart: Date,
+  ): boolean {
+    const exdates = Object.values(calendarEntry.exdate ?? {}) as any[];
+    return exdates.some((exceptionDateValue) => {
+      const exceptionDate =
+        exceptionDateValue instanceof Date
+          ? exceptionDateValue
+          : exceptionDateValue?.start instanceof Date
+            ? exceptionDateValue.start
+            : new Date(exceptionDateValue ?? Number.NaN);
+
+      if (!Number.isFinite(exceptionDate.getTime())) {
+        return false;
+      }
+
+      const occurrenceMoment = moment(occurrenceStart);
+      const utcOffset = occurrenceMoment.utcOffset();
+      const occurrenceDateWithoutOffset = occurrenceMoment
+        .clone()
+        .subtract(utcOffset, "minutes");
+
+      return moment(exceptionDate).isSame(occurrenceDateWithoutOffset, "day");
+    });
+  }
+
+  private adjustNodeIcalOccurrenceStart(
+    calendarEntry: any,
+    occurrenceStart: Date,
+  ): Date {
+    const tzid = calendarEntry.rrule?.origOptions?.tzid;
+    if (!tzid) {
+      return new Date(occurrenceStart);
+    }
+
+    let adjustedMoment = this.adjustForDst(
+      tzid,
+      calendarEntry.start instanceof Date
+        ? calendarEntry.start
+        : new Date(calendarEntry.start ?? occurrenceStart),
+      occurrenceStart,
+    );
+    adjustedMoment = this.adjustForOtherZones(tzid, adjustedMoment.toDate());
+    return adjustedMoment.toDate();
+  }
+
+  private adjustForOtherZones(tzid: string, currentDate: Date) {
+    const localTzid = tz.guess();
+
+    if (tzid === localTzid) {
+      return moment(currentDate);
+    }
+
+    const localTimezone = tz.zone(localTzid);
+    const originalTimezone = tz.zone(tzid);
+
+    if (!localTimezone || !originalTimezone) {
+      return moment(currentDate);
+    }
+
+    const offset =
+      localTimezone.utcOffset(currentDate.getTime()) -
+      originalTimezone.utcOffset(currentDate.getTime());
+
+    return moment(currentDate).add(offset, "minutes");
+  }
+
+  private adjustForDst(tzid: string, originalDate: Date, currentDate: Date) {
+    const timezone = tz.zone(tzid);
+
+    if (!timezone) {
+      return moment(currentDate);
+    }
+
+    const offset =
+      timezone.utcOffset(currentDate.getTime()) -
+      timezone.utcOffset(originalDate.getTime());
+
+    return moment(currentDate).add(offset, "minutes");
+  }
+
+  private findNodeIcalOverrideOccurrence(
+    calendarEntry: any,
+    occurrenceStart: Date,
+  ): { start: Date; end: Date } | null {
+    const recurrenceOverrides = Object.values(
+      calendarEntry.recurrences ?? {},
+    ) as any[];
+    for (const recurrenceOverride of recurrenceOverrides) {
+      const overrideStart =
+        recurrenceOverride?.start instanceof Date
+          ? recurrenceOverride.start
+          : new Date(recurrenceOverride?.start ?? Number.NaN);
+      const overrideEnd =
+        recurrenceOverride?.end instanceof Date
+          ? recurrenceOverride.end
+          : new Date(recurrenceOverride?.end ?? Number.NaN);
+
+      if (
+        Number.isFinite(overrideStart.getTime()) &&
+        Number.isFinite(overrideEnd.getTime()) &&
+        overrideStart.getTime() === occurrenceStart.getTime()
+      ) {
+        return {
+          start: overrideStart,
+          end: overrideEnd,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private buildCalendarEventDiagnostic(
+    summary: string,
+    uid: string,
+    startDate: Date,
+    endDate: Date,
+    recurrenceRule: string | null,
+    included: boolean,
+    reason: string,
+  ): CalendarEventDiagnostic {
+    return {
+      summary,
+      uid,
+      startText: Number.isFinite(startDate.getTime())
+        ? startDate.toLocaleString()
+        : "Invalid start",
+      endText: Number.isFinite(endDate.getTime())
+        ? endDate.toLocaleString()
+        : "Invalid end",
+      recurrenceRule,
+      included,
+      reason,
+    };
+  }
+
+  private normalizeCalendarBusyRanges(
+    ranges: CalendarBusyRange[],
+  ): CalendarBusyRange[] {
+    const sortedRanges = ranges
+      .filter((range) => range.endMinutes > range.startMinutes)
+      .sort(
+        (leftRange, rightRange) =>
+          leftRange.startMinutes - rightRange.startMinutes,
+      );
+    const mergedRanges: CalendarBusyRange[] = [];
+
+    for (const range of sortedRanges) {
+      const previousRange = mergedRanges[mergedRanges.length - 1];
+      if (!previousRange || range.startMinutes > previousRange.endMinutes) {
+        mergedRanges.push({ ...range });
+        continue;
+      }
+
+      previousRange.endMinutes = Math.max(
+        previousRange.endMinutes,
+        range.endMinutes,
+      );
+    }
+
+    return mergedRanges;
+  }
+
+  private parseIcsEvents(rawCalendar: string): ParsedIcsEvent[] {
+    const unfoldedLines = rawCalendar
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/\n[ \t]/g, "")
+      .split("\n");
+    const events: ParsedIcsEvent[] = [];
+    let currentEvent: ParsedIcsEvent | null = null;
+
+    for (const line of unfoldedLines) {
+      if (line === "BEGIN:VEVENT") {
+        currentEvent = {
+          uid: "",
+          summary: "",
+          start: new Date(Number.NaN),
+          end: new Date(Number.NaN),
+          recurrenceRule: null,
+          recurrenceId: null,
+          exceptionDates: [],
+        };
+        continue;
+      }
+
+      if (line === "END:VEVENT") {
+        if (
+          currentEvent &&
+          currentEvent.uid.length > 0 &&
+          Number.isFinite(currentEvent.start.getTime()) &&
+          Number.isFinite(currentEvent.end.getTime()) &&
+          currentEvent.end.getTime() > currentEvent.start.getTime()
+        ) {
+          events.push(currentEvent);
+        }
+        currentEvent = null;
+        continue;
+      }
+
+      if (!currentEvent) {
+        continue;
+      }
+
+      const separatorIndex = line.indexOf(":");
+      if (separatorIndex === -1) {
+        continue;
+      }
+
+      const propertyWithParams = line.slice(0, separatorIndex);
+      const propertyValue = line.slice(separatorIndex + 1);
+      const [propertyName, ...parameterValues] = propertyWithParams.split(";");
+      const params = new Map<string, string>();
+
+      for (const parameterValue of parameterValues) {
+        const [parameterName, parameterContent] = parameterValue.split("=");
+        if (!parameterName || !parameterContent) {
+          continue;
+        }
+
+        params.set(parameterName.toUpperCase(), parameterContent);
+      }
+
+      switch (propertyName.toUpperCase()) {
+        case "UID":
+          currentEvent.uid = propertyValue.trim();
+          break;
+        case "SUMMARY":
+          currentEvent.summary = this.decodeIcsText(propertyValue.trim());
+          break;
+        case "DTSTART": {
+          const parsedDate = this.parseIcsDateValue(
+            propertyValue.trim(),
+            params,
+          );
+          if (parsedDate) {
+            currentEvent.start = parsedDate;
+          }
+          break;
+        }
+        case "DTEND": {
+          const parsedDate = this.parseIcsDateValue(
+            propertyValue.trim(),
+            params,
+          );
+          if (parsedDate) {
+            currentEvent.end = parsedDate;
+          }
+          break;
+        }
+        case "DURATION": {
+          if (Number.isFinite(currentEvent.start.getTime())) {
+            const durationMilliseconds = this.parseIcsDurationToMilliseconds(
+              propertyValue.trim(),
+            );
+            if (durationMilliseconds > 0) {
+              currentEvent.end = new Date(
+                currentEvent.start.getTime() + durationMilliseconds,
+              );
+            }
+          }
+          break;
+        }
+        case "RRULE":
+          currentEvent.recurrenceRule = propertyValue.trim();
+          break;
+        case "RECURRENCE-ID": {
+          const parsedDate = this.parseIcsDateValue(
+            propertyValue.trim(),
+            params,
+          );
+          if (parsedDate) {
+            currentEvent.recurrenceId = parsedDate;
+          }
+          break;
+        }
+        case "EXDATE": {
+          const parsedDates = propertyValue
+            .split(",")
+            .map((value) => this.parseIcsDateValue(value.trim(), params))
+            .filter((value): value is Date => value instanceof Date);
+          currentEvent.exceptionDates.push(...parsedDates);
+          break;
+        }
+      }
+    }
+
+    return events;
+  }
+
+  private decodeIcsText(value: string): string {
+    return value
+      .replace(/\\n/gi, "\n")
+      .replace(/\\,/g, ",")
+      .replace(/\\;/g, ";")
+      .replace(/\\\\/g, "\\");
+  }
+
+  private parseIcsDateValue(
+    value: string,
+    params: Map<string, string>,
+  ): Date | null {
+    const valueType = params.get("VALUE")?.toUpperCase();
+
+    if (valueType === "DATE" || /^\d{8}$/.test(value)) {
+      const year = Number(value.slice(0, 4));
+      const month = Number(value.slice(4, 6)) - 1;
+      const day = Number(value.slice(6, 8));
+      return new Date(year, month, day, 0, 0, 0, 0);
+    }
+
+    const dateTimeMatch = value.match(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/,
+    );
+    if (!dateTimeMatch) {
+      return null;
+    }
+
+    const year = Number(dateTimeMatch[1]);
+    const month = Number(dateTimeMatch[2]) - 1;
+    const day = Number(dateTimeMatch[3]);
+    const hours = Number(dateTimeMatch[4]);
+    const minutes = Number(dateTimeMatch[5]);
+    const seconds = Number(dateTimeMatch[6]);
+
+    if (value.endsWith("Z")) {
+      return new Date(Date.UTC(year, month, day, hours, minutes, seconds));
+    }
+
+    return new Date(year, month, day, hours, minutes, seconds, 0);
+  }
+
+  private parseIcsDurationToMilliseconds(value: string): number {
+    const durationMatch = value.match(
+      /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/,
+    );
+    if (!durationMatch) {
+      return 0;
+    }
+
+    const weeks = Number(durationMatch[1] ?? 0);
+    const days = Number(durationMatch[2] ?? 0);
+    const hours = Number(durationMatch[3] ?? 0);
+    const minutes = Number(durationMatch[4] ?? 0);
+    const seconds = Number(durationMatch[5] ?? 0);
+
+    return (
+      ((((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000
+    );
+  }
+
+  private shouldIgnoreCalendarEvent(eventSummary: string): boolean {
+    const ignoredPatterns = this.settings.ignoredCalendarEventPatterns
+      .split(/\r?\n/)
+      .map((line) => line.trim().toLowerCase())
+      .filter((line) => line.length > 0);
+
+    if (ignoredPatterns.length === 0) {
+      return false;
+    }
+
+    const normalizedSummary = eventSummary.toLowerCase();
+    return ignoredPatterns.some((pattern) =>
+      normalizedSummary.includes(pattern),
+    );
+  }
+
+  private expandEventOccurrencesForDay(
+    event: ParsedIcsEvent,
+    dayStart: Date,
+    dayEnd: Date,
+  ): Array<{ start: Date; end: Date }> {
+    if (event.recurrenceId) {
+      return [{ start: event.start, end: event.end }];
+    }
+
+    if (!event.recurrenceRule) {
+      return [{ start: event.start, end: event.end }];
+    }
+
+    const recurrenceRule = this.parseRecurrenceRule(event.recurrenceRule);
+    if (!recurrenceRule || recurrenceRule.frequency !== "DAILY") {
+      return [{ start: event.start, end: event.end }];
+    }
+
+    const interval = recurrenceRule.interval ?? 1;
+    if (interval <= 0) {
+      return [{ start: event.start, end: event.end }];
+    }
+
+    const eventDuration = event.end.getTime() - event.start.getTime();
+    const eventDayStart = new Date(
+      event.start.getFullYear(),
+      event.start.getMonth(),
+      event.start.getDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+    const targetDayStart = new Date(
+      dayStart.getFullYear(),
+      dayStart.getMonth(),
+      dayStart.getDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+    const dayDifference = Math.round(
+      (targetDayStart.getTime() - eventDayStart.getTime()) /
+        (24 * 60 * 60 * 1000),
+    );
+
+    if (dayDifference < 0 || dayDifference % interval !== 0) {
+      return [];
+    }
+
+    const occurrenceStart = new Date(
+      event.start.getTime() + dayDifference * 24 * 60 * 60 * 1000,
+    );
+    const occurrenceEnd = new Date(occurrenceStart.getTime() + eventDuration);
+    const occurrenceKey = this.formatDateKey(occurrenceStart);
+    const isExcluded = event.exceptionDates.some(
+      (exceptionDate) => this.formatDateKey(exceptionDate) === occurrenceKey,
+    );
+
+    if (isExcluded) {
+      return [];
+    }
+
+    if (recurrenceRule.until && occurrenceStart > recurrenceRule.until) {
+      return [];
+    }
+
+    if (occurrenceEnd <= dayStart || occurrenceStart >= dayEnd) {
+      return [];
+    }
+
+    return [{ start: occurrenceStart, end: occurrenceEnd }];
+  }
+
+  private parseRecurrenceRule(
+    recurrenceRule: string,
+  ): { frequency: string; interval?: number; until?: Date } | null {
+    const segments = recurrenceRule.split(";");
+    const parsedRule = new Map<string, string>();
+
+    for (const segment of segments) {
+      const [key, value] = segment.split("=");
+      if (!key || !value) {
+        continue;
+      }
+
+      parsedRule.set(key.toUpperCase(), value);
+    }
+
+    const frequency = parsedRule.get("FREQ");
+    if (!frequency) {
+      return null;
+    }
+
+    return {
+      frequency,
+      interval: parsedRule.get("INTERVAL")
+        ? Number(parsedRule.get("INTERVAL"))
+        : undefined,
+      until: parsedRule.get("UNTIL")
+        ? (this.parseIcsDateValue(parsedRule.get("UNTIL") ?? "", new Map()) ??
+          undefined)
+        : undefined,
+    };
+  }
+
+  private formatDateKey(value: Date): string {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   }
 
   private findHeadingSectionRange(
@@ -596,6 +1561,55 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     ];
 
     return `${updatedLines.join("\n")}\n`;
+  }
+}
+
+class CalendarPreviewModal extends Modal {
+  previewData: CalendarPreviewData;
+
+  constructor(app: App, previewData: CalendarPreviewData) {
+    super(app);
+    this.previewData = previewData;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    const formattedDate = this.previewData.planningDate.toLocaleDateString();
+    contentEl.createEl("h2", {
+      text: `Busy calendar preview for ${formattedDate}`,
+    });
+
+    contentEl.createEl("p", {
+      text: `Loaded ${this.previewData.loadedCalendarCount} remote calendar${this.previewData.loadedCalendarCount === 1 ? "" : "s"}. Failed to load ${this.previewData.failedCalendarCount}.`,
+    });
+
+    if (this.previewData.matchedEvents.length === 0) {
+      contentEl.createEl("p", {
+        text: "No busy calendar events were visible for this day.",
+      });
+      return;
+    }
+
+    const listEl = contentEl.createEl("ul");
+    for (const busyRange of this.previewData.matchedEvents) {
+      listEl.createEl("li", {
+        text: `${this.formatMinutesAsTime(busyRange.startMinutes)}-${this.formatMinutesAsTime(busyRange.endMinutes)} ${busyRange.summary || "Untitled event"}`,
+      });
+    }
+  }
+
+  onClose(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+
+  private formatMinutesAsTime(totalMinutes: number): string {
+    const normalizedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+    const hours = Math.floor(normalizedMinutes / 60);
+    const minutes = normalizedMinutes % 60;
+    return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
   }
 }
 
@@ -714,5 +1728,91 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName("Remote calendars")
+      .setDesc(
+        "Optional. Add one or more internet calendars. Automatic Time Blocking will avoid placing generated tasks during matching calendar events for the day being planned.",
+      )
+      .setClass("atb-remote-calendars");
+
+    if (this.plugin.settings.remoteCalendarUrls.length === 0) {
+      containerEl.createEl("p", {
+        text: "No remote calendars added yet.",
+      });
+    }
+
+    this.plugin.settings.remoteCalendarUrls.forEach((calendarUrl, index) => {
+      new Setting(containerEl)
+        .setName(`Remote calendar ${index + 1}`)
+        .setDesc(
+          "Paste an internet calendar ICS URL. The link should end with .ics for the best results.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("https://example.com/calendar.ics")
+            .setValue(calendarUrl)
+            .onChange(async (value) => {
+              this.plugin.settings.remoteCalendarUrls[index] =
+                this.plugin.normalizeRemoteCalendarUrl(value);
+              await this.plugin.saveSettings();
+            }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("trash")
+            .setTooltip("Remove remote calendar")
+            .onClick(async () => {
+              this.plugin.settings.remoteCalendarUrls.splice(index, 1);
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+    });
+
+    new Setting(containerEl)
+      .setName("Add remote calendar")
+      .setDesc("Add another internet calendar feed.")
+      .addButton((button) =>
+        button.setButtonText("Add remote calendar").onClick(async () => {
+          this.plugin.settings.remoteCalendarUrls.push("");
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Calendar sync actions")
+      .setDesc(
+        "Refresh configured remote calendars and preview the busy calendar events visible to Automatic Time Blocking for the active note date.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Refresh now").onClick(async () => {
+          await this.plugin.refreshBusyCalendarsForActiveNote();
+        }),
+      )
+      .addButton((button) =>
+        button.setButtonText("Preview active note").onClick(async () => {
+          await this.plugin.previewBusyCalendarsForActiveNote();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Ignored calendar event patterns")
+      .setDesc(
+        "Optional. Add one case-insensitive event-title match per line. Matching calendar events are ignored when Automatic Time Blocking computes busy time. This is useful for recurring events you do not want to block around.",
+      )
+      .addTextArea((textArea) => {
+        textArea
+          .setPlaceholder("Focus time")
+          .setValue(this.plugin.settings.ignoredCalendarEventPatterns)
+          .onChange(async (value) => {
+            this.plugin.settings.ignoredCalendarEventPatterns = value;
+            await this.plugin.saveSettings();
+          });
+
+        textArea.inputEl.rows = 4;
+        textArea.inputEl.cols = 40;
+      });
   }
 }

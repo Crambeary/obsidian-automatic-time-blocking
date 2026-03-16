@@ -26,10 +26,16 @@ What is implemented today:
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
 - generated output written under a configurable heading in the current note
 - generated blocks snapped to a configurable minute interval and limited to the configured work day
+- optional plugin-owned remote calendars that are treated as busy time during scheduling
+- optional ignored calendar event patterns, matched case-insensitively against event titles, so selected recurring calendar events do not block scheduling
+- grouped Remote Calendar settings with an `Add remote calendar` button for managing more than one internet calendar feed
+- a manual `Refresh busy calendars` command for reloading configured remote calendars
+- a `Preview busy calendars for active note` command and settings action for inspecting which busy events are visible for the current planning date
 
 What is not implemented yet:
 
 - direct integration with the Obsidian Tasks plugin API
+- direct reuse of Day Planner's internal remote calendar state
 - Kanban note parsing
 - more advanced scheduling heuristics
 - richer metadata preservation rules
@@ -121,6 +127,13 @@ Implemented today:
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
 - generation of simple sequential time blocks into a configurable heading
 - configurable work-day bounds and start-interval snapping for generated blocks
+- optional avoidance of busy windows from configured remote calendars
+- optional event-title ignore patterns for calendar events you do not want to block around
+- remote calendars are configured in grouped settings rows, with an `Add remote calendar` button similar to the Day Planner-style internet calendar setup flow
+- the plugin caches the most recent preview result for the active planning date until you refresh or change calendar settings
+- the `Refresh busy calendars` command forces a fresh reload of the configured remote calendars
+- the `Preview busy calendars for active note` command shows which busy events the plugin can currently see for the active note date
+- ignored calendar event patterns are simple case-insensitive substring matches against the event title
 
 ## Task Syntax Supported Today
 
@@ -138,6 +151,14 @@ Current behavior:
 - if a task has a manual start time but no duration marker, the plugin uses the configured default duration
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
 - tasks without a manual start time are still scheduled automatically using the existing priority ordering and interval snapping rules
+- if remote calendars are configured, generated tasks avoid overlapping matching calendar events on the planning day
+
+Current calendar limitations:
+
+- the plugin reads internet calendar ICS feeds directly rather than integrating with Day Planner internals
+- ignore rules currently match event titles only
+- recurring event expansion is currently limited to non-recurring events and simple daily recurrences from ICS feeds
+- timezone handling is currently best-effort and does not yet interpret every ICS timezone variant
 
 The README still describes a broader intended direction beyond what the current code supports.
 
