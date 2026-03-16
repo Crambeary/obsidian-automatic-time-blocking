@@ -17,17 +17,8 @@ import * as ical from "node-ical";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
-interface DataviewIndexedTask {
-  text?: string;
-  completed?: boolean;
-  fullyCompleted?: boolean;
-  status?: string;
-  children?: DataviewIndexedTask[];
-}
-
 interface DataviewPageFile {
   path?: string;
-  tasks?: DataviewIndexedTask[];
 }
 
 interface DataviewPage {
@@ -36,6 +27,12 @@ interface DataviewPage {
 
 interface DataviewApi {
   pages: (source?: string) => unknown;
+}
+
+interface DataviewArrayLike<T> {
+  array?: () => T[];
+  values?: T[] | { array?: () => T[] };
+  [Symbol.iterator]?: () => Iterator<T>;
 }
 
 interface ExternalTaskDiscoveryResult {
@@ -83,6 +80,7 @@ interface CalendarEventDiagnostic {
 }
 
 type AutomaticStartMode = "snapped" | "now";
+type ExternalTaskDiscoveryMode = "built-in" | "dataview";
 
 const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
   highest: 6,
@@ -105,6 +103,7 @@ interface ObsidianAutomaticTimeBlockingSettings {
   breakDurationMinutes: number;
   remoteCalendarUrls: string[];
   ignoredCalendarEventPatterns: string;
+  externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
   externalTaskNotePaths: string[];
   externalTaskFolderPaths: string[];
 }
@@ -121,6 +120,7 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   breakDurationMinutes: 0,
   remoteCalendarUrls: [],
   ignoredCalendarEventPatterns: "",
+  externalTaskDiscoveryMode: "built-in",
   externalTaskNotePaths: [],
   externalTaskFolderPaths: [],
 };
@@ -149,6 +149,17 @@ interface TaskCollectionResult {
   usedDataviewIndex: boolean;
 }
 
+interface DataviewDiscoveryDiagnostics {
+  dataviewAvailable: boolean;
+  indexedPageCount: number;
+  scopedIndexedPageCount: number;
+  resolvedMarkdownFileCount: number;
+  matchingExternalTaskCount: number;
+  scopedPagePaths: string[];
+  resolvedMarkdownPaths: string[];
+  matchingTaskSummaries: string[];
+}
+
 interface ParsedTaskTimeRange {
   startMinutes: number;
   endMinutes: number;
@@ -172,6 +183,7 @@ type ExternalSourceSelection = TFile | TFolder;
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
+  debugLogEntries: string[] = [];
 
   async onload() {
     await this.loadSettings();
@@ -216,6 +228,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
         if (!checking) {
           void this.previewBusyCalendarsForActiveNote();
+        }
+
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "debug-dataview-discovery-for-active-note",
+      name: "Debug Dataview discovery for active note",
+      checkCallback: (checking: boolean) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file) {
+          return false;
+        }
+
+        if (!checking) {
+          void this.debugDataviewDiscoveryForActiveNote();
         }
 
         return true;
@@ -283,6 +312,35 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const planningDate = this.resolvePlanningDate(activeView.file.basename);
     const previewData = await this.getCalendarPreviewData(planningDate, false);
     new CalendarPreviewModal(this.app, previewData).open();
+  }
+
+  async debugDataviewDiscoveryForActiveNote(): Promise<void> {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || !activeView.file) {
+      new Notice("Open a Markdown note to debug Dataview discovery.");
+      return;
+    }
+
+    const planningDate = this.resolvePlanningDate(activeView.file.basename);
+    const diagnostics = await this.getDataviewDiscoveryDiagnostics(
+      activeView.file,
+      planningDate,
+    );
+
+    const debugText = this.formatDataviewDiagnostics(diagnostics);
+    this.appendDebugLog(
+      `Dataview discovery diagnostics for ${planningDate.toLocaleDateString()}\n${debugText}`,
+    );
+    console.log("[obsidian-atb] Dataview discovery diagnostics\n" + debugText);
+    new DataviewDiagnosticsModal(this.app, planningDate, debugText).open();
+  }
+
+  openDebugLog(): void {
+    new DebugLogModal(this.app, this.getDebugLogText()).open();
+  }
+
+  clearDebugLog(): void {
+    this.debugLogEntries = [];
   }
 
   private async generateTimeBlocksForActiveNote() {
@@ -404,6 +462,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     activeFile: TFile,
     planningDate: Date,
   ): ExternalTaskDiscoveryResult {
+    if (this.settings.externalTaskDiscoveryMode === "built-in") {
+      return {
+        files: this.getScopedExternalTaskFiles(activeFile),
+        usedDataviewIndex: false,
+      };
+    }
+
     const dataviewFiles = this.getDataviewIndexedExternalTaskFiles(
       activeFile,
       planningDate,
@@ -416,7 +481,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return {
-      files: this.getScopedExternalTaskFiles(activeFile),
+      files: [],
       usedDataviewIndex: false,
     };
   }
@@ -520,6 +585,130 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
   }
 
+  private async getDataviewDiscoveryDiagnostics(
+    activeFile: TFile,
+    planningDate: Date,
+  ): Promise<DataviewDiscoveryDiagnostics> {
+    const dataviewApi = this.getDataviewApi();
+    if (!dataviewApi) {
+      return {
+        dataviewAvailable: false,
+        indexedPageCount: 0,
+        scopedIndexedPageCount: 0,
+        resolvedMarkdownFileCount: 0,
+        matchingExternalTaskCount: 0,
+        scopedPagePaths: [],
+        resolvedMarkdownPaths: [],
+        matchingTaskSummaries: [],
+      };
+    }
+
+    const indexedPages = this.normalizeDataviewPages(dataviewApi.pages());
+    const scopedPagePaths: string[] = [];
+    const resolvedMarkdownFiles = new Map<string, TFile>();
+
+    for (const page of indexedPages) {
+      const pagePath = page.file?.path;
+      if (!pagePath || pagePath === activeFile.path) {
+        continue;
+      }
+
+      scopedPagePaths.push(pagePath);
+      const abstractFile = this.app.vault.getAbstractFileByPath(pagePath);
+      if (abstractFile instanceof TFile && abstractFile.extension === "md") {
+        resolvedMarkdownFiles.set(abstractFile.path, abstractFile);
+      }
+    }
+
+    const matchingTaskSummaries: string[] = [];
+    let matchingExternalTaskCount = 0;
+
+    for (const resolvedFile of resolvedMarkdownFiles.values()) {
+      const sourceContent = await this.app.vault.cachedRead(resolvedFile);
+      const sourceTasks = this.extractOpenTasks(
+        sourceContent,
+        resolvedFile.path,
+        true,
+      ).filter((task) =>
+        this.externalTaskMatchesPlanningDate(task.text, planningDate),
+      );
+
+      matchingExternalTaskCount += sourceTasks.length;
+      for (const task of sourceTasks) {
+        if (matchingTaskSummaries.length >= 10) {
+          break;
+        }
+
+        matchingTaskSummaries.push(
+          `${resolvedFile.path}#L${task.sourceLineNumber}: ${task.text}`,
+        );
+      }
+    }
+
+    return {
+      dataviewAvailable: true,
+      indexedPageCount: indexedPages.length,
+      scopedIndexedPageCount: scopedPagePaths.length,
+      resolvedMarkdownFileCount: resolvedMarkdownFiles.size,
+      matchingExternalTaskCount,
+      scopedPagePaths: scopedPagePaths.slice(0, 20),
+      resolvedMarkdownPaths: [...resolvedMarkdownFiles.keys()].slice(0, 20),
+      matchingTaskSummaries,
+    };
+  }
+
+  private formatDataviewDiagnostics(
+    diagnostics: DataviewDiscoveryDiagnostics,
+  ): string {
+    const lines = [
+      `Dataview available: ${diagnostics.dataviewAvailable ? "yes" : "no"}`,
+      `Indexed pages: ${diagnostics.indexedPageCount}`,
+      `Scoped indexed pages: ${diagnostics.scopedIndexedPageCount}`,
+      `Resolved markdown files: ${diagnostics.resolvedMarkdownFileCount}`,
+      `Matching external tasks: ${diagnostics.matchingExternalTaskCount}`,
+    ];
+
+    if (diagnostics.scopedPagePaths.length > 0) {
+      lines.push("", "Scoped pages:");
+      for (const pagePath of diagnostics.scopedPagePaths) {
+        lines.push(`- ${pagePath}`);
+      }
+    }
+
+    if (diagnostics.resolvedMarkdownPaths.length > 0) {
+      lines.push("", "Resolved markdown files:");
+      for (const resolvedPath of diagnostics.resolvedMarkdownPaths) {
+        lines.push(`- ${resolvedPath}`);
+      }
+    }
+
+    if (diagnostics.matchingTaskSummaries.length > 0) {
+      lines.push("", "Matching tasks:");
+      for (const taskSummary of diagnostics.matchingTaskSummaries) {
+        lines.push(`- ${taskSummary}`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  private appendDebugLog(entry: string): void {
+    const timestamp = new Date().toLocaleString();
+    this.debugLogEntries.push(`[${timestamp}] ${entry}`);
+
+    if (this.debugLogEntries.length > 100) {
+      this.debugLogEntries.splice(0, this.debugLogEntries.length - 100);
+    }
+  }
+
+  private getDebugLogText(): string {
+    if (this.debugLogEntries.length === 0) {
+      return "No debug log entries yet.";
+    }
+
+    return this.debugLogEntries.join("\n\n");
+  }
+
   private getDataviewIndexedExternalTaskFiles(
     activeFile: TFile,
     planningDate: Date,
@@ -529,50 +718,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       return null;
     }
 
-    const normalizedNotePaths = new Set(
-      this.settings.externalTaskNotePaths
-        .map((path) => this.normalizeScopedSourcePath(path))
-        .filter((path) => path.length > 0),
-    );
-    const normalizedFolderPaths = this.settings.externalTaskFolderPaths
-      .map((path) => this.normalizeScopedSourcePath(path))
-      .filter((path) => path.length > 0);
-
-    if (normalizedNotePaths.size === 0 && normalizedFolderPaths.length === 0) {
-      return [];
-    }
-
     const indexedPages = this.normalizeDataviewPages(dataviewApi.pages());
     const sourceFiles = new Map<string, TFile>();
 
     for (const page of indexedPages) {
       const pagePath = page.file?.path;
       if (!pagePath || pagePath === activeFile.path) {
-        continue;
-      }
-
-      if (
-        !this.isPathInExternalTaskScope(
-          pagePath,
-          normalizedNotePaths,
-          normalizedFolderPaths,
-        )
-      ) {
-        continue;
-      }
-
-      const indexedTasks = this.flattenDataviewTasks(page.file?.tasks ?? []);
-      const hasMatchingTask = indexedTasks.some((task) => {
-        if (!this.isDataviewTaskOpen(task)) {
-          return false;
-        }
-
-        return this.externalTaskMatchesPlanningDate(
-          task.text ?? "",
-          planningDate,
-        );
-      });
-      if (!hasMatchingTask) {
         continue;
       }
 
@@ -615,38 +766,40 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     if (
       value &&
       typeof value === "object" &&
-      "values" in value &&
-      Array.isArray((value as { values?: unknown }).values)
+      "array" in value &&
+      typeof (value as DataviewArrayLike<DataviewPage>).array === "function"
     ) {
-      return (value as { values: DataviewPage[] }).values;
+      return ((value as DataviewArrayLike<DataviewPage>).array?.() ??
+        []) as DataviewPage[];
     }
 
-    return [];
-  }
+    if (value && typeof value === "object" && "values" in value) {
+      const values = (value as DataviewArrayLike<DataviewPage>).values;
+      if (Array.isArray(values)) {
+        return values as DataviewPage[];
+      }
 
-  private flattenDataviewTasks(
-    tasks: DataviewIndexedTask[],
-  ): DataviewIndexedTask[] {
-    const flattenedTasks: DataviewIndexedTask[] = [];
-
-    for (const task of tasks) {
-      flattenedTasks.push(task);
-
-      const childTasks = Array.isArray(task.children) ? task.children : [];
-      if (childTasks.length > 0) {
-        flattenedTasks.push(...this.flattenDataviewTasks(childTasks));
+      if (
+        values &&
+        typeof values === "object" &&
+        "array" in values &&
+        typeof (values as { array?: () => DataviewPage[] }).array === "function"
+      ) {
+        return (values as { array: () => DataviewPage[] }).array();
       }
     }
 
-    return flattenedTasks;
-  }
-
-  private isDataviewTaskOpen(task: DataviewIndexedTask): boolean {
-    if (task.completed === true || task.fullyCompleted === true) {
-      return false;
+    if (
+      value &&
+      typeof value === "object" &&
+      Symbol.iterator in value &&
+      typeof (value as DataviewArrayLike<DataviewPage>)[Symbol.iterator] ===
+        "function"
+    ) {
+      return [...(value as Iterable<DataviewPage>)];
     }
 
-    return task.status === " " || task.status === "/" || task.status === ">";
+    return [];
   }
 
   private isPathInExternalTaskScope(
@@ -2317,6 +2470,69 @@ class CalendarPreviewModal extends Modal {
   }
 }
 
+class DataviewDiagnosticsModal extends Modal {
+  planningDate: Date;
+  diagnosticsText: string;
+
+  constructor(app: App, planningDate: Date, diagnosticsText: string) {
+    super(app);
+    this.planningDate = planningDate;
+    this.diagnosticsText = diagnosticsText;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    contentEl.createEl("h2", {
+      text: `Dataview discovery diagnostics for ${this.planningDate.toLocaleDateString()}`,
+    });
+
+    const preEl = contentEl.createEl("pre");
+    preEl.setText(this.diagnosticsText);
+  }
+
+  onClose(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+class DebugLogModal extends Modal {
+  logText: string;
+
+  constructor(app: App, logText: string) {
+    super(app);
+    this.logText = logText;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    contentEl.createEl("h2", {
+      text: "Automatic Time Blocking debug log",
+    });
+
+    const actionsEl = contentEl.createDiv();
+    const copyButton = actionsEl.createEl("button", {
+      text: "Copy log",
+    });
+    copyButton.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(this.logText);
+      new Notice("Copied debug log.");
+    });
+
+    const preEl = contentEl.createEl("pre");
+    preEl.setText(this.logText);
+  }
+
+  onClose(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
 class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
   plugin: ObsidianAutomaticTimeBlocking;
 
@@ -2328,6 +2544,8 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
   display(): void {
     let { containerEl } = this;
     containerEl.empty();
+    const usesBuiltInDiscovery =
+      this.plugin.settings.externalTaskDiscoveryMode === "built-in";
 
     containerEl.createEl("h2", { text: "Automatic Time Blocking" });
 
@@ -2482,110 +2700,53 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl)
-      .setName("External task source notes")
-      .setDesc(
-        "Optional. Pick one or more Markdown notes to pull dated open tasks from outside the active planning note. External tasks are included only when they carry a planning-date marker such as 📅 2026-03-16, ⏳ 2026-03-16, or >2026-03-16.",
-      );
-
-    if (this.plugin.settings.externalTaskNotePaths.length === 0) {
-      containerEl.createEl("p", {
-        text: "No external source notes selected yet.",
-      });
-    }
-
-    this.plugin.settings.externalTaskNotePaths.forEach((notePath, index) => {
-      new Setting(containerEl)
-        .setName(`Source note ${index + 1}`)
-        .setDesc(notePath)
-        .addButton((button) =>
-          button.setButtonText("Change").onClick(() => {
-            new ExternalSourceSuggestModal(
-              this.app,
-              "note",
-              async (selection) => {
-                if (!(selection instanceof TFile)) {
-                  return;
-                }
-
-                this.plugin.settings.externalTaskNotePaths[index] =
-                  selection.path;
-                await this.plugin.saveSettings();
-                this.display();
-              },
-            ).open();
-          }),
-        )
-        .addExtraButton((button) =>
-          button
-            .setIcon("trash")
-            .setTooltip("Remove source note")
-            .onClick(async () => {
-              this.plugin.settings.externalTaskNotePaths.splice(index, 1);
-              await this.plugin.saveSettings();
-              this.display();
-            }),
-        );
-    });
+    containerEl.createEl("h3", { text: "Task discovery" });
 
     new Setting(containerEl)
-      .setName("Add external source note")
+      .setName("Task discovery mode")
       .setDesc(
-        "Pick another Markdown note to include as an external task source.",
+        "Choose whether external tasks are discovered through the plugin's built-in scoped note and folder list or through Dataview. Dataview mode ignores the built-in source list and uses Dataview's indexed task discovery instead.",
       )
-      .addButton((button) =>
-        button.setButtonText("Add note").onClick(() => {
-          new ExternalSourceSuggestModal(
-            this.app,
-            "note",
-            async (selection) => {
-              if (!(selection instanceof TFile)) {
-                return;
-              }
-
-              if (
-                !this.plugin.settings.externalTaskNotePaths.includes(
-                  selection.path,
-                )
-              ) {
-                this.plugin.settings.externalTaskNotePaths.push(selection.path);
-                await this.plugin.saveSettings();
-              }
-
-              this.display();
-            },
-          ).open();
-        }),
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("built-in", "Built-in")
+          .addOption("dataview", "Dataview")
+          .setValue(this.plugin.settings.externalTaskDiscoveryMode)
+          .onChange(async (value: ExternalTaskDiscoveryMode) => {
+            this.plugin.settings.externalTaskDiscoveryMode = value;
+            await this.plugin.saveSettings();
+            this.display();
+          }),
       );
 
-    new Setting(containerEl)
-      .setName("External task source folders")
-      .setDesc(
-        "Optional. Pick one or more folders as a fallback source scope when tasks are stored across multiple notes. Automatic Time Blocking will read Markdown notes inside these folders instead of scanning the whole vault.",
-      );
+    if (usesBuiltInDiscovery) {
+      new Setting(containerEl)
+        .setName("External task source notes")
+        .setDesc(
+          "Optional. Pick one or more Markdown notes to pull dated open tasks from outside the active planning note. External tasks are included only when they carry a planning-date marker such as 📅 2026-03-16, ⏳ 2026-03-16, or >2026-03-16.",
+        );
 
-    if (this.plugin.settings.externalTaskFolderPaths.length === 0) {
-      containerEl.createEl("p", {
-        text: "No external source folders selected yet.",
-      });
-    }
+      if (this.plugin.settings.externalTaskNotePaths.length === 0) {
+        containerEl.createEl("p", {
+          text: "No external source notes selected yet.",
+        });
+      }
 
-    this.plugin.settings.externalTaskFolderPaths.forEach(
-      (folderPath, index) => {
+      this.plugin.settings.externalTaskNotePaths.forEach((notePath, index) => {
         new Setting(containerEl)
-          .setName(`Source folder ${index + 1}`)
-          .setDesc(folderPath)
+          .setName(`Source note ${index + 1}`)
+          .setDesc(notePath)
           .addButton((button) =>
             button.setButtonText("Change").onClick(() => {
               new ExternalSourceSuggestModal(
                 this.app,
-                "folder",
+                "note",
                 async (selection) => {
-                  if (!(selection instanceof TFolder)) {
+                  if (!(selection instanceof TFile)) {
                     return;
                   }
 
-                  this.plugin.settings.externalTaskFolderPaths[index] =
+                  this.plugin.settings.externalTaskNotePaths[index] =
                     selection.path;
                   await this.plugin.saveSettings();
                   this.display();
@@ -2596,45 +2757,148 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           .addExtraButton((button) =>
             button
               .setIcon("trash")
-              .setTooltip("Remove source folder")
+              .setTooltip("Remove source note")
               .onClick(async () => {
-                this.plugin.settings.externalTaskFolderPaths.splice(index, 1);
+                this.plugin.settings.externalTaskNotePaths.splice(index, 1);
                 await this.plugin.saveSettings();
                 this.display();
               }),
           );
-      },
-    );
+      });
+
+      new Setting(containerEl)
+        .setName("Add external source note")
+        .setDesc(
+          "Pick another Markdown note to include as an external task source.",
+        )
+        .addButton((button) =>
+          button.setButtonText("Add note").onClick(() => {
+            new ExternalSourceSuggestModal(
+              this.app,
+              "note",
+              async (selection) => {
+                if (!(selection instanceof TFile)) {
+                  return;
+                }
+
+                if (
+                  !this.plugin.settings.externalTaskNotePaths.includes(
+                    selection.path,
+                  )
+                ) {
+                  this.plugin.settings.externalTaskNotePaths.push(
+                    selection.path,
+                  );
+                  await this.plugin.saveSettings();
+                }
+
+                this.display();
+              },
+            ).open();
+          }),
+        );
+
+      new Setting(containerEl)
+        .setName("External task source folders")
+        .setDesc(
+          "Optional. Pick one or more folders as an external task source scope when tasks are stored across multiple notes. Automatic Time Blocking will read Markdown notes inside these folders instead of scanning the whole vault.",
+        );
+
+      if (this.plugin.settings.externalTaskFolderPaths.length === 0) {
+        containerEl.createEl("p", {
+          text: "No external source folders selected yet.",
+        });
+      }
+
+      this.plugin.settings.externalTaskFolderPaths.forEach(
+        (folderPath, index) => {
+          new Setting(containerEl)
+            .setName(`Source folder ${index + 1}`)
+            .setDesc(folderPath)
+            .addButton((button) =>
+              button.setButtonText("Change").onClick(() => {
+                new ExternalSourceSuggestModal(
+                  this.app,
+                  "folder",
+                  async (selection) => {
+                    if (!(selection instanceof TFolder)) {
+                      return;
+                    }
+
+                    this.plugin.settings.externalTaskFolderPaths[index] =
+                      selection.path;
+                    await this.plugin.saveSettings();
+                    this.display();
+                  },
+                ).open();
+              }),
+            )
+            .addExtraButton((button) =>
+              button
+                .setIcon("trash")
+                .setTooltip("Remove source folder")
+                .onClick(async () => {
+                  this.plugin.settings.externalTaskFolderPaths.splice(index, 1);
+                  await this.plugin.saveSettings();
+                  this.display();
+                }),
+            );
+        },
+      );
+
+      new Setting(containerEl)
+        .setName("Add external source folder")
+        .setDesc(
+          "Pick another folder to include as an external task source scope.",
+        )
+        .addButton((button) =>
+          button.setButtonText("Add folder").onClick(() => {
+            new ExternalSourceSuggestModal(
+              this.app,
+              "folder",
+              async (selection) => {
+                if (!(selection instanceof TFolder)) {
+                  return;
+                }
+
+                if (
+                  !this.plugin.settings.externalTaskFolderPaths.includes(
+                    selection.path,
+                  )
+                ) {
+                  this.plugin.settings.externalTaskFolderPaths.push(
+                    selection.path,
+                  );
+                  await this.plugin.saveSettings();
+                }
+
+                this.display();
+              },
+            ).open();
+          }),
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("Dataview discovery")
+        .setDesc(
+          "Dataview mode is active. Automatic Time Blocking will use Dataview's indexed task discovery for external tasks and ignore the built-in file and folder source list while this mode is selected.",
+        );
+    }
 
     new Setting(containerEl)
-      .setName("Add external source folder")
+      .setName("Debug log")
       .setDesc(
-        "Pick another folder to include as an external task source scope.",
+        "Open the in-plugin debug log for recent Dataview discovery diagnostics and related debug output.",
       )
       .addButton((button) =>
-        button.setButtonText("Add folder").onClick(() => {
-          new ExternalSourceSuggestModal(
-            this.app,
-            "folder",
-            async (selection) => {
-              if (!(selection instanceof TFolder)) {
-                return;
-              }
-
-              if (
-                !this.plugin.settings.externalTaskFolderPaths.includes(
-                  selection.path,
-                )
-              ) {
-                this.plugin.settings.externalTaskFolderPaths.push(
-                  selection.path,
-                );
-                await this.plugin.saveSettings();
-              }
-
-              this.display();
-            },
-          ).open();
+        button.setButtonText("Open log").onClick(() => {
+          this.plugin.openDebugLog();
+        }),
+      )
+      .addButton((button) =>
+        button.setButtonText("Clear log").onClick(() => {
+          this.plugin.clearDebugLog();
+          this.plugin.openDebugLog();
         }),
       );
 
