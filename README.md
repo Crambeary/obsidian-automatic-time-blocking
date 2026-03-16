@@ -17,7 +17,9 @@ What is implemented today:
 - a settings tab for output heading, day start time, work day end time, start interval, and default duration
 - a command named `Generate time blocks from active note`
 - parsing of open or in-progress Markdown task lines from the active note
+- preservation of nested open subtasks under their parent task when generated output is written back to the note
 - duration markers in the form `[30m]` or `@30m`
+- preservation of duration markers on generated time-block lines, so task text like `Task @60m` stays visible after scheduling
 - ordering of active-note tasks by Obsidian Tasks priority markers before generating blocks, using `🔺`, `⏫`, `🔼`, no marker, `🔽`, and `⏬` from highest to lowest
 - generated output written under a configurable heading in the current note
 - generated blocks snapped to a configurable minute interval and limited to the configured work day
@@ -108,6 +110,8 @@ Implemented today:
 
 - a persisted settings tab
 - active-note task parsing for open or in-progress Markdown tasks
+- preservation of nested open subtasks under the scheduled parent task in generated output
+- preservation of duration markers such as `[30m]` and `@30m` in generated task text
 - active-note ordering that follows Obsidian Tasks priority markers from highest to lowest, with unmarked tasks placed between medium and low priority
 - generation of simple sequential time blocks into a configurable heading
 - configurable work-day bounds and start-interval snapping for generated blocks

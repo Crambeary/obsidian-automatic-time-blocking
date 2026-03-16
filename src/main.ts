@@ -43,11 +43,14 @@ interface ParsedTask {
   text: string;
   durationMinutes: number;
   priority: TaskPriority;
+  indent: number;
+  subtasks: ParsedTask[];
 }
 
 interface GeneratedTimeBlocks {
   scheduledLines: string[];
   unscheduledLines: string[];
+  scheduledTaskCount: number;
   skippedTaskCount: number;
 }
 
@@ -133,7 +136,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     await this.app.vault.modify(view.file, updatedContent);
 
-    const generatedCount = generatedTimeBlocks.scheduledLines.length;
+    const generatedCount = generatedTimeBlocks.scheduledTaskCount;
     const skippedCount = generatedTimeBlocks.skippedTaskCount;
     const skippedSuffix =
       skippedCount > 0
@@ -148,6 +151,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private extractOpenTasks(content: string): ParsedTask[] {
     const lines = content.split(/\r?\n/);
     const tasks: ParsedTask[] = [];
+    const taskStack: ParsedTask[] = [];
 
     for (const line of lines) {
       const taskMatch = line.match(/^\s*[-*]\s+\[( |\/|>)\]\s+(.*)$/);
@@ -155,13 +159,32 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
+      const indentMatch = line.match(/^(\s*)[-*]\s+\[( |\/|>)\]\s+/);
       const rawText = taskMatch[2].trim();
       const durationMinutes = this.parseDurationMinutes(rawText);
-      tasks.push({
+      const parsedTask: ParsedTask = {
         text: this.cleanTaskText(rawText),
         durationMinutes,
         priority: this.parseTaskPriority(rawText),
-      });
+        indent: indentMatch?.[1].length ?? 0,
+        subtasks: [],
+      };
+
+      while (
+        taskStack.length > 0 &&
+        taskStack[taskStack.length - 1].indent >= parsedTask.indent
+      ) {
+        taskStack.pop();
+      }
+
+      const parentTask = taskStack[taskStack.length - 1];
+      if (parentTask) {
+        parentTask.subtasks.push(parsedTask);
+      } else {
+        tasks.push(parsedTask);
+      }
+
+      taskStack.push(parsedTask);
     }
 
     return tasks.sort(
@@ -214,7 +237,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private cleanTaskText(taskText: string): string {
     return taskText
       .replace(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/, "")
-      .replace(/\[(\d+)m\]|@(\d+)m/gi, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -222,6 +244,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private buildTimeBlockLines(tasks: ParsedTask[]): GeneratedTimeBlocks {
     const scheduledLines: string[] = [];
     const unscheduledLines: string[] = [];
+    let scheduledTaskCount = 0;
     let currentMinutes = this.getInitialStartMinutes();
     const workDayEndMinutes = this.getWorkDayEndMinutes();
     let skippedTaskCount = 0;
@@ -230,7 +253,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       currentMinutes = this.snapMinutesToInterval(currentMinutes);
       if (currentMinutes >= workDayEndMinutes) {
         skippedTaskCount += 1;
-        unscheduledLines.push(`- [ ] ${task.text}`);
+        unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
 
@@ -238,18 +261,22 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       const endMinutes = currentMinutes + task.durationMinutes;
       if (endMinutes > workDayEndMinutes) {
         skippedTaskCount += 1;
-        unscheduledLines.push(`- [ ] ${task.text}`);
+        unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
 
       currentMinutes = endMinutes;
       const end = this.formatMinutesAsTime(endMinutes);
-      scheduledLines.push(`- [ ] ${start}-${end} ${task.text}`);
+      scheduledTaskCount += 1;
+      scheduledLines.push(
+        ...this.buildRenderedTaskLines(task, `${start}-${end} `),
+      );
     }
 
     return {
       scheduledLines,
       unscheduledLines,
+      scheduledTaskCount,
       skippedTaskCount,
     };
   }
@@ -266,6 +293,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return lines.join("\n");
+  }
+
+  private buildRenderedTaskLines(
+    task: ParsedTask,
+    prefix = "",
+    depth = 0,
+  ): string[] {
+    const indentation = "    ".repeat(depth);
+    const renderedLines = [`${indentation}- [ ] ${prefix}${task.text}`];
+
+    for (const subtask of task.subtasks) {
+      renderedLines.push(
+        ...this.buildRenderedTaskLines(subtask, "", depth + 1),
+      );
+    }
+
+    return renderedLines;
   }
 
   private getInitialStartMinutes(): number {
