@@ -1,0 +1,766 @@
+Updated 
+4 months ago
+
+//
+Copy Markdown
+
+NotePlan Icon <https://noteplan.co/>
+
+
+  AutoTimeBlocking / Event Automations ReadMe ⭐️
+
+
+        Report Bugs/Ask Questions on Discord <https://discord.com/channels/763107030223290449/984925384875339876/984925386360115212>
+
+*IMPORTANT NOTE*: NotePlan recently released the ability to write timeblocks to calendars automatically. This feature is not compatible with AutoTimeBlocking, so you must set the "Create Events" to "None" under the cog/setting icon at the top of the calendar to use the /atb command.
+
+
+  What is AutoTimeBlocking?
+
+Research has proven that people are more productive when they plan, schedule, and block time to work on tasks. The reverse is also true -- when you don't plan, it increases your cognitive load. It decreases your productivity to constantly remember to return to a ToDo app (or even ToDos in NotePlan) to decide what to work on. And when you open your phone to go to your ToDo app, you might get lost on Instagram by accident. 😳 Planning your day in blocks helps dramatically -- it reminds you what to do when, lowering cognitive overhead and giving you time to focus on getting things done. NotePlan has a built-in, compelling feature that allows you to block out times (temporarily) on your calendar to work on certain things.  Read about Time Blocking in NotePlan <https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking> As Noteplan's author, Eduard Metzger, once wrote:
+
+    Time blocking is like budgeting, but for your time, not for your money.
+
+    Budgeting is a tripwire helping to break out of autopilot and ask yourself
+
+    if it still makes sense what you are doing. Budget your time to avoid getting 
+
+    into rabbit holes. 🐇 🕳
+
+The core Noteplan time blocking functionality works great, but to do it, you have to look at your calendar, find slots that work, figure out what the start/stop time for those slots are, and type them into a note to create the blocks. This is not hard if you do it for one or two daily things. But then inevitably, things come up, and you miss your time block. Or you have more things you need to add. You need to re-edit all the times manually. That's a hassle. I'd bet you eventually give up and go back to flipping through Instagram instead.
+
+That's why I wrote the AutoTimeBlocking Plugin (|/atb|). The |/atb| plugin can take tasks that you have scheduled for today (either with the |> today| tag or by scheduling it within the app, and |/atb| will find appropriate times in the day for you to work on those tasks. 
+
+AND MORE IMPORTANTLY, when something comes up during your time block (you get hungry, you get a phone call, or...) and you don't get done what you wanted to, you just rerun the command, and it finds new slots for you. As much as I try to stay inside my time blocks and get everything done, I run the command several times a day, re-syncing with my day. *It still helps me immensely to have a plan for what to work on when*.
+
+
+    How does it work?
+
+In NotePlan, when you create a todo with the |> today| tag or today's date on the task, it shows up in the "References" section at the top of today's note. Tasks can be anywhere, in any document. And then, with AutoTimeBlocking, today’s “references” automatically become Time Blocks which NotePlan renders on your calendar, reminding you to get those tasks done and suggesting good times for doing them:
+
+Then all you have to do is pay attention to what it says you should do when and voila! Easy as that…everything gets done! ;) If it doesn’t all get done... rerun the command and block a new set of times!
+
+How do you get started?
+
+
+    First, Learn About Time Blocking
+
+An essential first step is learning how Time Blocking works in NotePlan. If you haven't already,  Read about Time Blocking <https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking> -- it's a short, quick read and is essential background for what this plugin is trying to automate.
+
+
+    Launching the Plugin
+
+  * //Download the *Event Automations* plugin, which contains the /atb feature
+
+  * //Open up Today's Calendar Note (CMD-T) 
+
+  * //Invoke the AutoTimeBlocking plugin by typing: |/atb|
+
+  * //You should see it create time blocks in your Today calendar note for *todo items which are in your References section* 
+
+
+    So, What's It Supposed To Do?
+
+  * //The |/atb| plugin pulls items from the References section in the document and helps you create Time Blocks for them. Any items in References that are completed tasks are ignored. 
+
+  * //Tasks and other notes can live anywhere in NotePlan (Project Notes, Calendar Notes, etc.), and they show up in the References section in Today's Calendar Note if they are tagged with > today or have today's date in the task line (e.g.,>2021-11-27)
+
+  * //The |/atb| plugin will try to find time and make a Time Block for each item in your References section (things you said you wanted to do today) 
+
+  * //NOTE: As you complete an item you created a time block for, mark it completed in the References section so if you run the /atb command again, it will know to ignore that item and won't create a new time block for it
+
+  * //TODAY-ONLY LIMITATION: AutoTimeBlocking can only be run today for today's Time Blocks, because a task marked for > today is only relevant on today's note. There is currently no way to create AutoTimeBlocks for tomorrow or the future -- see the Roadmap at the bottom of this document for some ideas for future features/improvements. Note, however, that you can create Synced Lines for future Calendar Note dates (if a task is flagged for >thatDate). 
+
+  * //|/mdatb - Mark Done and run ATB| - This command is a shortcut to mark all selected /tasks/ as */done/* and automatically run /atb to tell you what to work on next. It's just a shortcut for marking a task and then running the |/atb| command. Note: you can highlight multiple tasks and text/titles etc. and it will only set the selected lines that are /tasks (of any type)/ as done.
+
+
+    When In The Day Are Time Blocks Placed?
+
+  * //By default, Time Blocks can be created all day long. You can also change the settings, for instance, to only allow Time Blocks, for example, between |08:00| and |18:00| by changing the "work day" times in Settings (see below)
+
+  * //Obviously, time blocks are not placed when they would overlap with events on your calendar or items you've time blocked by hand
+
+
+    Setting Task/Block Length
+
+  * //By default, tasks get 15-minute length Time Blocks. If you have tasks that are not 15-mins, you can set the estimated length by entering the length when you create or edit the task, like this (using the apostrophe and an |h| for an hour and |m| for minutes anywhere in the task:
+
+|* Do something that takes an hour and a half '1h30m| (1 hour, 30 min task)
+
+  * //Notes: 
+
+  * //the timing should not have spaces: |'1h30m| is good, but |'1h 30m| is not.
+
+  * //you can change the apostrophe to another character in settings (see below)
+
+
+    Prioritizing Tasks/Time Blocks (aka Sorting)
+
+  * //By default, the plugin sorts items in ascending order of time duration. Getting small tasks done is rewarding and builds momentum, so the plugin will try to insert as many smaller tasks as possible (pebbles) onto the larger ones (the boulders). See below for how to override this behavior.
+
+  * //If you have tasks you want to be sorted as a higher priority, you can put exclamation points (e.g. '! '!! or '!!!) anywhere in the task line. The more exclamations you give, the higher the priority. So, a task like:
+
+|* Something important '1h45m !| 
+
+...will be a higher priority than all tasks with no exclamation marks, so the plugin will try to find time for it first, and a task with two |!!| will come before that one (assuming there is a time slot that it fits in). 
+
+
+    BY_TIMEBLOCK_TAG mode (aka "Named Timeblocks")
+
+  * //Many people like to timeblock their day by first by type, client, or modality. For instance, 2 hours on ClientA and 2 hours later for Personal todos. If you change the mode in settings to "BY_TIMEBLOCK_TAG" mode, /atb will first try to insert tasks that match a particular tag/modality. For example, If you have timeblocks you created in your Daily Note (e.g. by creating it manually or in a daily template) such as: 
+
+|17:00 - 19:00 ClientA 🕑|
+
+|20:00 - 22:00 HomeTodos 🕑|
+
+... then /atb will look for tasks that have a tag that match the non-time text of that timeblock, e.g.
+
+|* Write Proposal for #ClientA|
+
+|* Create Presentation for #ClientA|
+
+|* Fix Fence #HomeTodos|
+
+... and it will attempt to schedule that task first and foremost in the matching timeblock (17:00-19:00 for #ClientA)
+
+*IMPORTANT NOTE:* BY_TIMEBLOCK_TAG mode will only work if you have "Detect Time Blocks" set in Preferences > Todos, and the "Text must contain includes some text/tag and you use that text/tag in the timeblock categories you put on the calendar (e.g. 🕑 in the examples above).
+
+
+      BY_TIMEBLOCK_TAG mode example:
+
+For example, let's say you have two named timeblocks in your Daily Note for "Production" and "Finance"
+
+You then run /atb
+
+You end up with the tasks scheduled as timeblocks in the matching named timeblocks, and any untagged or unmatching tasks get scheduled in the first available time:
+
+
+    Settings
+
+  * //The plugin runs perfectly well without ever seeing or changing the Settings. However, suppose you want to fine-tune your experience. In that case, you can change the plugin's behavior through the settings panel on the NotePlan Mac desktop app (configuration is not currently possible on iOS). 
+
+  * //To open up the settings panel go to NotePlan > Preferences>> Plugins, and click the cog/gear icon next to the "AutoTimeBlocking/Event Automations" plugin
+
+
+    Here's what each of those settings means:
+
+
+      "Default time block duration" (default: 15; presetKey: "defaultDuration")
+
+  * //The default duration for an event is 15 minutes. That means if no duration marker/string is explicitly typed in a task, it will assume the task takes 15m. Change this to any value you want for your default task duration. This setting allows you to not worry about entering times for common short tasks. If no time is specified, the task is assumed to be '15m.
+
+
+      "Include all todos in today's note" (default: true; presetKey: "includeAllTodos")
+
+  * //Also include todos written in today's note (assume they are implicitly dated to be done today)
+
+
+      "Checking a checklist item marks the original item done" (default: true; presetKey: "checkedItemChecksOriginal")
+
+  * //Checking off a checklist AutoTimeBlocked line item will find and check the original task. To make this work, the onEditorWillSave trigger/frontmatter will be automatically added by the plugin.\nIMPORTANT NOTE: Only applies if:\n(1) you use the “+” for your Time Block Leading Character and\n s(2) the 'Include links to task location in time blocks' is set to 'Pretty Links'
+
+
+      "Create a link from the time block to the original task" (default: "Pretty Links"; presetKey: "includeLinks")
+
+  * //Add a link to the original task so you can easily get back to it to make notes
+
+  * //These links can be either [[wiki links]] or url-type links
+
+  * //Note: if you want checked timeblocks to automatically check the underlying item, this setting should be set to: 'Pretty Links'
+
+
+      "Allow tasks to be split" (default: false; presetKey: "allowEventSplits")
+
+  * //By default, tasks only are placed in Time Blocks that are equal to their full length. So, if you have a |'2h| task but there are no open two-hour blocks in your day, that task will not be placed. If you change this setting to |true (checked)|, it will allow the plugin to split tasks, and so when it gets to this |'2h| task in the priority waterfall, it will grab any free block time it can find, even if that means creating eight 15-minute blocks throughout the day to get this task its entire two hours. Or, if there are not enough slots to get the whole two hours, it will take as many as possible.
+
+
+      "Include any tasks that match text" (default: empty -- match all referenced tasks; presetKey: "includeTasksWithText")
+
+  * //If you put text in this list (separated by commas), you can limit the items that /atb includes in time blocks to these items. For instance, if you enter:
+
+|blox,tbx| then only tasks with the words 'blox' OR 'tbx' anywhere in the task would be included. So:
+
+|* this one should be included #blox|
+
+|* this one should be included tbx|
+
+|* this one would not be included.|
+
+  * //Pro tip: If you know Regular Expressions (RegExp), you can enter a regex in the place of a string (e.g. |box,tbx,/^f/|) would also add any tasks which start with the letter "f" to the previous list
+
+
+      "Exclude any tasks that match text" (default: empty -- do not exclude anything; presetKey: "excludeTasksWithText")
+
+  * //If you put text strings in this array, you can exclude items that /atb includes in time blocks to these items. For instance, if you enter:
+
+|excludeTasksWithText: blox, tbx,| then tasks with the words 'blox' OR 'tbx' anywhere in the task would be EXCLUDED. So:
+
+|* this one should be excluded #blox|
+
+|* this one should be excluded tbx|
+
+|* this one would be included.|
+
+  * //Pro tip: If you know Regular Expressions (RegExp), you can enter a regex in the place of a string (e.g. |box, tbx, /^f/|), which would also exclude any tasks which start with the letter "f" to the previous list
+
+
+      "Task duration marker" (default: |'|; presetKey: "durationMarker")
+
+  * //Any unique marker can signify the start of a task duration string in your task text. By default, it's an apostrophe (e.g. |'2h32m|), but if you changed |durationMarker| to "~", you could enter  |~2h32m|, and it would work just the same. 
+
+
+      "Time block leading character" (default: `*`; presetKey: "todoChar")
+
+  * //This is the character/sequence used when the Time Blocks are created in the Calendar Note. There are only a few characters that NotePlan will recognize as the beginning of a Time Block line. The default for the plugin is a star (basically a ToDo, because that's (currently) the only character that will work with writing the time blocks permanently to the calendar). Other legal options for this character are: |-|, or |#| (headings, which could be #, ##, ###, or ####) . @codedungeon likes his TimeBlocks to be #### headings, but as stated above, only the `*` currently works if you want to turn your time blocks into full-fledged calendar entries
+
+
+      "Unique AutoTimeBlock tag" (default: "#🕑"; presetKey: "timeBlockTag")
+
+  * //This tag is placed by the plugin on the Time Blocks it creates in the Calendar Note. This differentiates Time Blocks created by the plugin from any others that may have been hand-written by a user. This way, the plugin can delete and recreate Time Blocks as the day progresses. This tag also is attached to calendar events created by the plugin. This tag can be any text value. See |createCalendarEntries| in the Settings section.
+
+  * //Note: You can use NotePlan's Theme API/settings to hide this tag from view in the Editor. So, even though the plugin will put this tag on a Time Block line, your theme settings could hide that tag, so you don't see it. See |Hiding TimeBlockTag in your Theme| below
+
+  * //*IMPORTANT NOTE*: If you have set a character/string in the NotePlan > Preferences > Todos >Timeblocks "Text Must Contain" blank, you should set this field to something that contains that character. So for example, if your Todos/Text Must Contain setting in NotePlan preferences is "🕑", then the default /atb tag |#🕑| will work pefectly, because it contains the preferences value, but is also slightly different so /atb can differentiate between an /atb-generated timeblock and a normal hand-drawn timeblock
+
+
+      Remove Duration (default: true/checked; presetKey: "removeDuration")
+
+  * //The plugin assumes that your duration markers, e.g. `'2h32m, are only there for Auto creating the TimeBlock, so that number is removed when the Time Block is created, so you don't clutter the calendar text. If you want to keep the durations string in your Time Block or Calendar Event (see below), change this value to false
+
+
+      "Heading for time blocks in note" (default: "Time Blocks" -- note /no/ hashes; presetKey: "timeBlockHeading")
+
+  * //Time Blocks are by default placed at the top of Today's Calendar Note under a title heading specified by this setting. However, suppose there is a pre-existing heading with the name specified in the timeBlockHeading field somewhere in the note. In that case, the plugin will place the generated Time Blocks under that existing heading. This is an excellent way to keep your Daily Notes organized using Templates and Daily Notes. Just put a header like |## Time Blocks| in your template, and the |/atb| plugin will set the Time Blocks under that heading.
+
+  * //If you want your time blocks to be inserted naked into the top of the note without any heading, make this timeBlockHeading an empty string, e.g. |timeBlockHeading: '',|
+
+
+      "Start of work day" (default: "00:00"; presetKey: "workDayStart")
+
+  * //The plugin will only start looking to place blocks at or after the |workDayStart| time AND after the time it is right now. Note: you must use 24-hour/military time for these times. AM/PM etc., do not work. For example, let's say you run the plugin at 05:14 in the morning, but workDayStart is set to "08:00", even if your calendar is empty between 05:00-08:00, you will not get any items placed until at or after 08:00
+
+  * //See |Presets| below for ways to set/suppress this in certain cases
+
+
+      "workDayEnd" (default: "23:59"; presetKey: "workDayEnd")
+
+  * //The plugin will not place Time Blocks that extend past this time of day. 
+
+  * //See |Presets| below for ways to set/suppress this in certain cases
+
+
+      Include links to task location in time blocks (default: OFF; presetKey: "includeLinks")
+
+  * //Appends a link to the original location of a particular task. Can create a standard internal NotePlan link, e.g. [[internal#links]], or if you want to reduce clutter, a Pretty Link <https://noteplan.co/n/h> which will display only a single character, for example:  📄 <https://www.google.com/>
+
+
+      Link text/char (if Pretty Links selected above) (default: 📄; presetKey: "linkText")
+
+  * //If Pretty Links is on (see above), this character will display inside the link.
+
+
+      "Create calendar entries from time blocks" (default: false; presetKey: "createCalendarEntries")
+
+  * //By default, the plugin creates Time Blocks as text in your daily note, and then NotePlan sees those Time Block entries and overlays them onto your calendar per the Time Blocking <https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking> documentation. However, by design, those Time Blocks are ephemeral. They are not actually on your calendar. You won't see them anywhere outside of NotePlan. 
+
+  * //Jonathan Clark (@jgclark) built a plugin (Event Helpers <https://github.com/NotePlan/plugins/tree/main/jgclark.EventHelpers>) which will take hand-entered Time Blocks and convert them to actual calendar entries on a particular calendar you can specify. This makes for a perfect 1-2 punch
+
+  * //If having Time Blocks in your calendar permanently is interesting to you, I would suggest, before changing any of these settings:
+
+  * //Use this plugin to create Time Blocks, and if you like what's been created,
+
+  * //Run @jgclark's |/time blocks to calendar| command to make calendar entries out of the Time Blocks. If you find you are always satisfied with the result, then change the settings as detailed below
+
+  * //If you set |createCalendarEntries| to |true|, this AutoTimeBlocking plugin uses EventHelpers' code to create calendar entries out of the Time Blocks that are automatically created. At that point, the events/time blocks will show up on your calendar permanently/outside of Noteplan, and you can drag them around in your calendar app like everyday calendar events (aka @Stacy-Fantastical combo). The Event Helpers plugin leaves critical parts of the Time Blocks in your Daily Calendar Note after creating the calendar events. 
+
+  * //Note: unless a specific calendar name is specified (see below), the events will be written to your default system calendar (in Mac desktop Calendar app preferences)
+
+  * //Pro Tip: If you set |createCalendarEntries| to |true| and |insertIntoEditor| to |false|, this plugin will (silently) create your Time Blocks as Calendar items, and you will have no remnants of the Time Blocks in your Daily Note. See below for an important note
+
+
+      "Delete previously entered time blocks" (default: false/unchecked; presetKey: "deletePreviousCalendarEntries")
+
+  * //Each time this plugin is run, if |createCalendarEntries| is set, it will create new events on the calendar. By default, it will not delete any calendar entries for Time Blocks that were made earlier in the day by this plugin. So, you could quickly end up with multiple copies of the same task on your calendar.
+
+  * //However, you may want the plugin to work just like Auto Time Blocks, first removing the previous blocks from today's calendar and replacing them with new, updated ones from now forward. Suppose that's what you want; set |deletePreviousCalendarEntries| to |true| each time the plugin is run. In that case, it will scan today's calendar, look for events placed on the calendar by this plugin previously, and delete those before re-assessing where time blocks should be placed and adding them to the calendar.
+
+  * //NOTE: What we don't have yet is the middle ground. The one thing it will /not/ do is leave events on the calendar from *completed* tasks on previous runs of /atb. Everything from previous /atb runs stays or gets wiped clean, and you start fresh.  
+
+
+      Name of Calendar to write to (default: blank; presetKey: "calendarToWriteTo")
+
+  * //If you put a calendar name that corresponds to the name of a calendar that NotePlan has *write* access to, then when writing timeblocks as events to the calendar, it writes to the calendar with this name. Leaving the field blank writes to the default system calendar (see above)
+
+
+      Processed tag name (default: "#event_created"; presetKey: "eventEnteredOnCalTag")
+
+  * //@jgclark's |/time blocks to calendar| command (and by extension, this plugin) tags events placed in the calendar with this field to separate your everyday calendar events from ones created by this or the EventHelpers plugin. This tag is used to identify the time block entries so they can be removed and re-drawn in the future.
+
+
+      Time block start interval (default: 5; presetKey: "intervalMins")
+
+  * //This controls the boundaries on which tasks can start. By default, a task can start on any 5m boundary. So if a meeting or another Time Block ends at 09:42, the next Time Block could start at 09:45. If you changed this setting to 15, each Time Block would only start on a 15, 30, 45, or 60.
+
+
+      Task→Time Block processing mode (default: "PRIORITY_FIRST"; presetKey: "mode")
+
+  * //Tasks are placed based on this mode setting. By default, priority tasks are placed first, then shorter tasks, then longer tasks. See Prioritizing section above.
+
+  * //BY_TIMEBLOCK_TAG enables the insertion of tasks into timeblocks you draw on the calendar. 
+
+  * //See BY_TIMEBLOCK_TAG mode above.
+
+  * //MANUAL_ORDERING mode constrains the timeblocks to be created to items which are in today's note already (no referenced tasks), and creates the timeblocks in the order the tasks appear in Today's note. If you want to have manual ordering with some ability to include referenced tasks, you can use the |/Insert Synced Copies| command to insert the referenced tasks as synced lines into today's note before running the command.
+
+  * //Other modes of task ordering may come later based on user demand
+
+
+      BY_TIMEBLOCK_TAG Orphans (default: OUTPUT_FOR_INFO (but don't schedule them)
+
+(this is only relevant when the setting above is set to BY_TIMEBLOCK_TAG). When placing tasks into timeblocks of matching tag, you can change the setting (orphanTagggedTasks) to dictate what should happen when there are more tasks than will fit in the matching time block. /atb will place the highest priority ones first, but it's possible to have more tasks scheduled for today than the matching timeblock will allow. For instance, if you have a timeblock for 30m called #work and you have 3 15-minute tasks that have the #work tag, only two will fit in the #work timeblock, so the settings will dictate what happens to the third one:
+
+  * //"IGNORE_THEM" -- tasks that won't fit will be ignored (no timeblocks will be created for them)
+
+  * //"OUTPUT_FOR_INFO (but don't schedule them)" -- no timeblocks will be created for these tasks but they will be noted in the Editor as not fitting
+
+  * //"SCHEDULE_ELSEWHERE_LAST" -- leftover tasks will be placed into first available slots after other tasks are processed
+
+  * //"SCHEDULE_ELSEWHERE_FIRST" -- leftover tasks will be placed into first available slots before other non-matching tasks are processed
+
+
+      Insert time blocks into note Editor (default: true/checked; presetKey: "insertIntoEditor")
+
+  * //By default, the plugin drops the Time Block lines into the Today Calendar Note in the NotePlan Editor. If you don't want to see the Time Blocks in your Today note (e.g., you want only to write the Time Blocks to your actual calendar as calendar entries), then you can set this to |false| and you will not see the Time Block text in your daily note
+
+
+      Presets (Expert Mode)
+
+  * //Presets provide a way to override the config settings for a particular command run temporarily. This is useful for patterns you want to repeat frequently, but not *every* time you run the plugin. An example is changing your weekend "work times" to different start/end times than your default workday times. You can invoke a preset by running the command: 
+
+|/Create AutoTimeBlocks using presets| 
+
+or if you prefer the shortcut: |/presets| (for AutoTimeBlock with Presets)
+
+  * //The variable key you need for each setting override is listed next to each preference setting above in the form of: |presetKey: "XXX"|
+
+  * //The plugin ships with a few default presets, which you can modify and add to. Note: this is JSON format. If you don’t know how to edit JSON, ask in the plugin-dev Discord channel.  For instance:
+
+|  ...
+	[
+     { 
+      label: 'Limit Time Blocks to Work Hours', 
+      workDayStart: '08:00', 
+      workDayEnd: '17:59' 
+     },
+      {
+        label: 'Create Timeblocks on Calendar',
+        createCalendarEntries: true,
+        deletePreviousCalendarEntries: true,
+        todoChar: '*',
+      },
+    ]
+
+|
+
+  * //The "label" field is displayed in the Command Bar popup to choose a particular preset. All fields other than "label" temporarily override that specific field in the configuration for this command run. So, for instance, in the first example above, if you choose |"Limit Time Blocks to Work Hours"| from the presets menu after running the /presets command, the workDayStart would be set to 8 am. The workDayEnd will be set to just before 6 pm for this command run (everything else would stay as specified in your preferences). The last example would tell /atb to create the time blocks as actual calendar items rather than simply writing them to today's calendar note (I call this @stacey-mode).
+
+  * //If you need support on Presets, DM @dwertheimer on Discord
+
+
+    Timeframes
+
+When you are operating in 'BY_TIMEBLOCK_TAG' mode, you can have a task slotted into a particular part of the day by tagging it with a timeframe matching one in the timeframe list. So, if you have tasks that you want to run /atb on:
+
+|* read book #late|
+
+|* do something any time|
+
+|* work out at gym #early|
+
+/atb will attempt to place "read book" in the 'late' timeframe and "work out" in the early timeframe.  Default values are as follow (sorry, they have to be in JSON format):
+
+|	early: ["07:00","08:30"],
+	morning: ["08:30","12:00"],
+	afternoon: ["12:00","18:00"],
+	evening: ["18:00","22:00"],
+	late: ["22:00","23:00"]
+} ```
+But you can change the timeframe names and times to suit your needs. Each timeframe has a name (names can be whatever you want), a start and a stop time (in military time). The timeframes are every day -- there is currently no distinction between days of the week. If you make changes to the values in this field, it's a good idea to copy and paste your changes into jsonlint.com to test the validity of the JSON.
+**Don't want these named slots?:** It won't affect you if you are not using BY_TIMEBLOCK_TAG mode. If you are using BY_TIMEBLOCK_TAG mode but don't want this behavior, just blank the values out between the "{" and the "}"
+**Note on placement order:** Items tagged with a timeframe (e.g. #early) will be placed first in that period (if available). Any manually-placed timeblock tags will be ignored. However, depending on your setting for "What to do with orphan tagged timeblock tasks", the /atb may try to schedule the tasks for you in other available slots.
+## Synced Today Todos
+What if you want an editable synced-line copy of all `today` items without automatic time blocks? Well, there's a command for that! `/Insert Synced Today Todos` will insert today's todos into the Editor under the heading specified in preferences. You can do this *with* TimeBlocking or on its own. **Note: you can run this on future dates and it will copy the synced lines for any items tagged with that particular date**
+To run this from a template, create a heading (in this case, it's a heading+refresh link combination) and a template command that will insert the content if there is any:
+
+|
+
+
+    Today's Synced Tasks <noteplan://x-callback-url/runPlugin?pluginID=dwertheimer.EventAutomations&command=Insert%20Synced%20Todos%20for%20Open%20Calendar%20Note>
+
+<% const syncedLines = await DataStore.invokePluginCommandByName("Insert Synced Todos for Open Calendar Note","dwertheimer.EventAutomations",["yes"])  -%>
+
+<% if (syncedLines?.length) { -%>
+
+<%- syncedLines %>
+
+<% } -%>
+
+|
+If you want Synced Today Todos to be created/updated every time the `/atb` command runs, you can check the setting:
+## Removing Synced Lines from previous days
+You may not want to keep Synced Lines that were created by this plugin on previous days. It may just be clutter in your previous days' notes, and so, you can run one of two commands to remove previous Synced Lines:
+`/Remove Synced Todos for Open Calendar Note` (applies to the note currently open in the Editor) or
+`/Remove All Previous Synced Copies Written by this Plugin` (all previous Calendar notes)
+NOTE: This command can be run as a template tag, for instance, as part of your daily note:
+
+|
+
+<% await DataStore.invokePluginCommandByName("Remove All Previous Synced Copies Written by this Plugin","dwertheimer.EventAutomations",["yes"])  -%>
+
+|
+## Removing Synced Lines from previous days
+You may not want to keep Time Blocks that were created by this plugin on previous days. It may just be clutter in your previous days' notes, and so, you can run one of two commands to remove previous Time Blocks created by this plugin:
+`/Remove Time Blocks for Open Calendar Note` (applies to the note currently open in the Editor) or
+`/Remove All Previous Time Blocks in Calendar Notes Written by this Plugin` (all previous Calendar notes)
+NOTE: This command can be run as a template tag, for instance, as part of your daily note:
+
+|
+
+<% await DataStore.invokePluginCommandByName("Remove All Previous Time Blocks in Calendar Notes Written by this Plugin","dwertheimer.EventAutomations",["yes"])  -%>
+
+|
+## Create Events from Text
+There is a basic command (`/pevt`) to add an event to the calendar using plain text. This is basically the same as opening a new event (CMD-E) and typing a description, e.g. "Meet with John on Tuesday at 9". The difference in using the command is that the plugin command (`/pevt`) will save the text and a link to the event created in the current note. Good if you want to keep track of the context when you created the event.
+When you're in the Editor and you want to add a bunch of items to the calendar, you can use the `/cevt` (Create Events from Text) command to convert all the items under a particular heading you choose into calendar items on your default calendar. The plugin will search all lines in the "block" under the chosen heading (e.g. all lines until a blank line, another title of greater value or a separator line).
+For example:
+		￼
+becomes:
+		￼
+and all those items are links to calendar entries on your default calendar
+
+## Misc Notes
+### Calendar Refreshing (events not showing up in the calendar outside of NotePlan)
+When you invoke the AutoTimeBlocking plugin (or event the EventHelpers plugin) to create actual events in your calendar, they show up inside NotePlan immediately. However, you may not see those events immediately on your calendar if you click over to your Apple Calendar (or Fantastical, Google Calendar, or another app). That is not a NotePlan issue as much as it's an iCal refresh setting. If you open up the Mac "Calendar" app, go to the "Calendar" menu item, and select "Accounts..." you can update your refresh settings. 
+After doing this, you should see all your TimeBlocks show up in under a minute. 
+
+### Hiding TimeBlockTag in your Theme
+Here's the entry you can put in your theme file to hide the default Time Block tag from view in your editor. If you don't know how to edit themes, go to https://help.noteplan.co/article/44-customize-themes (or Google "NotePlan Customize Themes")
+```jsonc
+    "Timeblock-HideTag": {
+      "color": "#8FBCBB",
+      "regex": "\\s#🕑", 
+      "matchPosition": 0,
+      "type": "nolink",
+      "isHiddenWithoutCursor": true,
+      "isRevealOnCursorRange": true,
+    },
+```
+
+## Roadmap - Some things we're considering based on user demand
+- ### Unassigned Tasks (tasks that there wasn't enough time for during the day)
+- Splitting tasks - have a way to say "don't split me" [Discord](https://discord.com/channels/763107030223290449/984925384875339876/1013931997992849420) maybe ~2h means splittable
+- Allow for "soft-circle" times: [Discord](https://discord.com/channels/763107030223290449/984925384875339876/1007290729300758589)
+- create documentation for presets
+- create a setting to include all tasks in today’s note
+- think about adding "< x days ago" - @daysago(20) or [<20 days ago](linktothatday'snote
+- Create interactive versions that ask for either:
+	- an end time
+	- an includeTasksWithText string (e.g. #fix) 
+- Create an "ASK" preset (e.g., ask for each string)
+- Events-to-calendar: items that were completed and are on the calendar stay on the calendar, but all else is erased and moved/new times created
+- AutoTimeBlocking for future dates...e.g., planning Time Blocks now/tonight for tomorrow. You can only run the command on Today's calendar/Calendar Note for Today.
+- Other `mode` settings for Task prioritization (e.g., Largest first, etc.)
+- Separate the creation and deleting of calendar entries so that `deletePreviousCalendarEntries` applies only to items created by this plugin and not EventHelpers
+- Remove priorities (!!!) from the timeblock text
+- Auto Timeblock for tasks that are in today's note (even ones that are not marked as > today)
+- Per @pan  compatibility would be better if natural language was supported: '1h: 1hr, '1hour    '30m: '30min,30minutes or 30minute    '1h30m:  '1h 30m
+- Allow user to set heading level of Time Blocks header (@stacey suggestion)
+- Allow sorting of priorities so that one exclamation is a top priority
+- Drag/drop as prioritization order (order on the page)
+- Summary/Shutdown Mode: See Stacey's video: https://drive.google.com/file/d/1-uTqEGeZvC_QJ7sX9MzGWjMCbrxi7XVn/view?usp=sharing
+- Add up the time of timeblocks - and display where?
+#  AutoTimeBlocking ReadMe ⭐️
+#### [Report Bugs/Ask Questions on Discord](https://discord.com/channels/763107030223290449/984925384875339876/984925386360115212)
+# What is the AutoTimeBlocking Plugin?
+Research has proven that people are more productive when they plan, schedule, and block time to work on tasks. The reverse is also true -- when you don't plan, it increases your cognitive load. It decreases your productivity to constantly remember to return to a ToDo app (or even ToDos in NotePlan) to decide what to work on. And when you open your phone to go to your ToDo app, you might get lost on Instagram by accident. 😳 Planning your day in blocks helps dramatically -- it reminds you what to do when, lowering cognitive overhead and giving you time to focus on getting things done. NotePlan has a built-in, compelling feature that allows you to block out times (temporarily) on your calendar to work on certain things.  [Read about Time Blocking in NotePlan](https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking) As Noteplan's author, Eduard Metzger, once wrote:
+> Time blocking is like budgeting, but for your time, not for your money.
+>  Budgeting is a tripwire helping to break out of autopilot and ask yourself
+>  if it still makes sense what you are doing. Budget your time to avoid getting 
+> into rabbit holes. 🐇 🕳
+The core Noteplan time blocking functionality works great, but to do it, you have to look at your calendar, find slots that work, figure out what the start/stop time for those slots are, and type them into a note to create the blocks. This is not hard if you do it for one or two daily things. But then inevitably, things come up, and you miss your time block. Or you have more things you need to add. You need to re-edit all the times manually. That's a hassle. I'd bet you eventually give up and go back to flipping through Instagram instead.
+That's why I wrote the AutoTimeBlocking Plugin (`/atb`). The `/atb` plugin can take tasks that you have scheduled for today (either with the `> today` tag or by scheduling it within the app, and `/atb` will find appropriate times in the day for you to work on those tasks. 
+AND MORE IMPORTANTLY, when something comes up during your time block (you get hungry, you get a phone call, or...) and you don't get done what you wanted to, you just rerun the command, and it finds new slots for you. As much as I try to stay inside my time blocks and get everything done, I run the command several times a day, re-syncing with my day. **It still helps me immensely to have a plan for what to work on when**.
+## How does it work?
+In NotePlan, when you create a todo with the `> today` tag or today's date on the task, it shows up in the "References" section at the top of today's note. Tasks can be anywhere, in any document. And then, with AutoTimeBlocking, today’s “references” automatically become Time Blocks which NotePlan renders on your calendar, reminding you to get those tasks done and suggesting good times for doing them:
+ ![image](AutoTimeBlocking%20Readme_attachments/Screenshot%2011-28-21%20at%2010.57.43%20AM.png)
+Then all you have to do is pay attention to what it says you should do when and voila! Easy as that…everything gets done! ;) If it doesn’t all get done... rerun the command and block a new set of times!
+
+How do you get started?
+
+## First, Learn About Time Blocking
+An essential first step is learning how Time Blocking works in NotePlan. If you haven't already,  [Read about Time Blocking](https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking) -- it's a short, quick read and is essential background for what this plugin is trying to automate.
+
+## Launching the Plugin
+- Open up Today's Calendar Note (CMD-T) 
+- Invoke the AutoTimeBlocking plugin by typing: `/atb`
+- You should see it create time blocks in your Today calendar note for **todo items which are in your References section** 
+
+## So, What's It Supposed To Do?
+- The `/atb` plugin pulls items from the References section in the document and helps you create Time Blocks for them. Any items in References that are completed tasks are ignored. 
+- Tasks and other notes can live anywhere in NotePlan (Project Notes, Calendar Notes, etc.), and they show up in the References section in Today's Calendar Note if they are tagged with > today or have today's date in the task line (e.g.,>2021-11-27)
+- The `/atb` plugin will try to find time and make a Time Block for each item in your References section (things you said you wanted to do today) 
+- NOTE: As you complete an item you created a time block for, mark it completed in the References section so if you run the /atb command again, it will know to ignore that item and won't create a new time block for it
+- TODAY-ONLY LIMITATION: AutoTimeBlocking can only be run today for today's Time Blocks, because a task marked for > today is only relevant on today's note. There is currently no way to create AutoTimeBlocks for tomorrow or the future -- see the Roadmap at the bottom of this document for some ideas for future features/improvements. Note, however, that you can create Synced Lines for future Calendar Note dates (if a task is flagged for >thatDate). 
+- `/mdatb - Mark Done and run ATB` - This command is a shortcut to mark all selected *tasks* as ***done*** and automatically run /atb to tell you what to work on next. It's just a shortcut for marking a task and then running the `/atb` command. Note: you can highlight multiple tasks and text/titles etc. and it will only set the selected lines that are *tasks (of any type)* as done.
+## When In The Day Are Time Blocks Placed?
+- By default, Time Blocks can be created all day long. You can also change the settings, for instance, to only allow Time Blocks, for example, between `08:00` and `18:00` by changing the "work day" times in Settings (see below)
+- Obviously, time blocks are not placed when they would overlap with events on your calendar or items you've time blocked by hand
+
+## Setting Task/Block Length
+- By default, tasks get 15-minute length Time Blocks. If you have tasks that are not 15-mins, you can set the estimated length by entering the length when you create or edit the task, like this (using the apostrophe and an `h` for an hour and `m` for minutes anywhere in the task:
+		`* Do something that takes an hour and a half '1h30m` (1 hour, 30 min task)
+- Note: you can change the apostrophe to another character in settings (see below)
+
+## Prioritizing Tasks/Time Blocks (aka Sorting)
+- By default, the plugin sorts items in ascending order of time duration. Getting small tasks done is rewarding and builds momentum, so the plugin will try to insert as many smaller tasks as possible (pebbles) onto the larger ones (the boulders). See below for how to override this behavior.
+- If you have tasks you want to be sorted as a higher priority, you can put exclamation points (e.g. '! '!! or '!!!) anywhere in the task line. The more exclamations you give, the higher the priority. So, a task like:
+		`* Something important '1h45m !` 
+- ...will be a higher priority than all tasks with no exclamation marks, so the plugin will try to find time for it first, and a task with two `!!` will come before that one (assuming there is a time slot that it fits in). 
+
+## Settings
+- The plugin runs perfectly well without ever seeing or changing the Settings. However, suppose you want to fine-tune your experience. In that case, you can change the plugin's behavior through the settings panel on the NotePlan Mac desktop app (configuration is not currently possible on iOS). 
+- To open up the settings panel go to NotePlan > Preferences>> Plugins, and click the cog/gear icon next to the "Event Automations" plugin
+![image](AutoTimeBlocking%20Readme_attachments/Screen%20Shot%202022-02-21%20at%204.09.07%20PM.png)
+
+## Here's what each of those settings means:
+### "Default time block duration" (default: 15; presetKey: "defaultDuration")
+- The default duration for an event is 15 minutes. That means if no duration marker/string is explicitly typed in a task, it will assume the task takes 15m. Change this to any value you want for your default task duration. This setting allows you to not worry about entering times for common short tasks. If no time is specified, the task is assumed to be '15m.
+
+### "Include all todos in today's note" (default: true; presetKey: "includeAllTodos")
+- Also include todos written in today's note (assume they are implicitly dated to be done today)
+
+### "Checking a checklist item marks the original item done" (default: true; presetKey: "checkedItemChecksOriginal")
+- Checking off a checklist AutoTimeBlocked line item will find and check the original task. To make this work, the onEditorWillSave trigger/frontmatter will be automatically added by the plugin.\nIMPORTANT NOTE: Only applies if:\n(1) you use the “+” for your Time Block Leading Character and\n s(2) the 'Include links to task location in time blocks' is set to 'Pretty Links'
+
+### "Leave completed timeblocks when re-calculating?" (default: false; presetKey: "leaveCompletedTBs")
+- When enabled, timeblocks that have been marked complete will remain in the note/calendar when timeblocks are re-calculated. The plugin removes the AutoTimeBlock tag from completed items so they are not deleted during the next timeblock calculation, preserving your completed work for posterity.
+
+### "Create a link from the time block to the original task" (default: "Pretty Links"; presetKey: "includeLinks")
+- Add a link to the original task so you can easily get back to it to make notes
+- These links can be either [[wiki links]] or url-type links
+- Note: if you want checked timeblocks to automatically check the underlying item, this setting should be set to: 'Pretty Links'
+
+### "Allow tasks to be split" (default: false; presetKey: "allowEventSplits")
+- By default, tasks only are placed in Time Blocks that are equal to their full length. So, if you have a `'2h` task but there are no open two-hour blocks in your day, that task will not be placed. If you change this setting to `true (checked)`, it will allow the plugin to split tasks, and so when it gets to this `'2h` task in the priority waterfall, it will grab any free block time it can find, even if that means creating eight 15-minute blocks throughout the day to get this task its entire two hours. Or, if there are not enough slots to get the whole two hours, it will take as many as possible.
+### "Include any tasks that match text" (default: empty -- match all referenced tasks; presetKey: "includeTasksWithText")
+- If you put text in this list (separated by commas), you can limit the items that /atb includes in time blocks to these items. For instance, if you enter:
+	`blox,tbx` then only tasks with the words 'blox' OR 'tbx' anywhere in the task would be included. So:
+	`* this one should be included #blox`
+	`* this one should be included tbx`
+	`* this one would not be included.`
+- Pro tip: If you know Regular Expressions (RegExp), you can enter a regex in the place of a string (e.g. `box,tbx,/^f/`) would also add any tasks which start with the letter "f" to the previous list
+### "Exclude any tasks that match text" (default: empty -- do not exclude anything; presetKey: "excludeTasksWithText")
+- If you put text strings in this array, you can exclude items that /atb includes in time blocks to these items. For instance, if you enter:
+	`excludeTasksWithText: blox, tbx,` then tasks with the words 'blox' OR 'tbx' anywhere in the task would be EXCLUDED. So:
+	`* this one should be excluded #blox`
+	`* this one should be excluded tbx`
+	`* this one would be included.`
+- Pro tip: If you know Regular Expressions (RegExp), you can enter a regex in the place of a string (e.g. `box, tbx, /^f/`), which would also exclude any tasks which start with the letter "f" to the previous list
+### "Task duration marker" (default: `'`; presetKey: "durationMarker")
+- Any unique marker can signify the start of a task duration string in your task text. By default, it's an apostrophe (e.g. `'2h32m`), but if you changed `durationMarker` to "~", you could enter  `~2h32m`, and it would work just the same. 
+### "Time block leading character" (default: `*`; presetKey: "todoChar")
+- This is the character/sequence used when the Time Blocks are created in the Calendar Note. There are only a few characters that NotePlan will recognize as the beginning of a Time Block line. The default for the plugin is a star (basically a ToDo, because that's (currently) the only character that will work with writing the time blocks permanently to the calendar). Other legal options for this character are: `-`, or `#` (headings, which could be #, ##, ###, or ####) . @codedungeon likes his TimeBlocks to be #### headings, but as stated above, only the `*` currently works if you want to turn your time blocks into full-fledged calendar entries
+### "Unique AutoTimeBlock tag" (default: "#🕑"; presetKey: "timeBlockTag")
+- This tag is placed by the plugin on the Time Blocks it creates in the Calendar Note. This differentiates Time Blocks created by the plugin from any others that may have been hand-written by a user. This way, the plugin can delete and recreate Time Blocks as the day progresses. This tag also is attached to calendar events created by the plugin. This tag can be any text value. See `createCalendarEntries` in the Settings section.
+- Note: You can use NotePlan's Theme API/settings to hide this tag from view in the Editor. So, even though the plugin will put this tag on a Time Block line, your theme settings could hide that tag, so you don't see it. See `Hiding TimeBlockTag in your Theme` below
+### Remove Duration (default: true/checked; presetKey: "removeDuration")
+- The plugin assumes that your duration markers, e.g. `'2h32m, are only there for Auto creating the TimeBlock, so that number is removed when the Time Block is created, so you don't clutter the calendar text. If you want to keep the durations string in your Time Block or Calendar Event (see below), change this value to false
+### "Heading for time blocks in note" (default: "Time Blocks" -- note *no* hashes; presetKey: "timeBlockHeading")
+- Time Blocks are by default placed at the top of Today's Calendar Note under a title heading specified by this setting. However, suppose there is a pre-existing heading with the name specified in the timeBlockHeading field somewhere in the note. In that case, the plugin will place the generated Time Blocks under that existing heading. This is an excellent way to keep your Daily Notes organized using Templates and Daily Notes. Just put a header like `## Time Blocks` in your template, and the `/atb` plugin will set the Time Blocks under that heading.
+- If you want your time blocks to be inserted naked into the top of the note without any heading, make this timeBlockHeading an empty string, e.g. `timeBlockHeading: '',`
+### "Start of work day" (default: "00:00"; presetKey: "workDayStart")
+- The plugin will only start looking to place blocks at or after the `workDayStart` time AND after the time it is right now. Note: you must use 24-hour/military time for these times. AM/PM etc., do not work. For example, let's say you run the plugin at 05:14 in the morning, but workDayStart is set to "08:00", even if your calendar is empty between 05:00-08:00, you will not get any items placed until at or after 08:00
+- See `Presets` below for ways to set/suppress this in certain cases
+### "workDayEnd" (default: "23:59"; presetKey: "workDayEnd")
+- The plugin will not place Time Blocks that extend past this time of day. 
+- See `Presets` below for ways to set/suppress this in certain cases
+### Include links to task location in time blocks (default: OFF; presetKey: "includeLinks")
+- Appends a link to the original location of a particular task. Can create a standard internal NotePlan link, e.g. [[internal#links]], or if you want to reduce clutter, a [Pretty Link](h) which will display only a single character, for example:  [📄](http://www.google.com)
+### Link text/char (if Pretty Links selected above) (default: 📄; presetKey: "linkText")
+- If Pretty Links is on (see above), this character will display inside the link.
+### "Create calendar entries from time blocks" (default: false; presetKey: "createCalendarEntries")
+- By default, the plugin creates Time Blocks as text in your daily note, and then NotePlan sees those Time Block entries and overlays them onto your calendar per the [Time Blocking](https://help.noteplan.co/article/52-part-2-tasks-events-and-reminders#timeblocking) documentation. However, by design, those Time Blocks are ephemeral. They are not actually on your calendar. You won't see them anywhere outside of NotePlan. 
+- Jonathan Clark (@jgclark) built a plugin ([Event Helpers](https://github.com/NotePlan/plugins/tree/main/jgclark.EventHelpers)) which will take hand-entered Time Blocks and convert them to actual calendar entries on a particular calendar you can specify. This makes for a perfect 1-2 punch
+- If having Time Blocks in your calendar permanently is interesting to you, I would suggest, before changing any of these settings:
+	- Use this plugin to create Time Blocks, and if you like what's been created,
+	- Run @jgclark's `/time blocks to calendar` command to make calendar entries out of the Time Blocks. If you find you are always satisfied with the result, then change the settings as detailed below
+		- If you set `createCalendarEntries` to `true`, this AutoTimeBlocking plugin uses EventHelpers' code to create calendar entries out of the Time Blocks that are automatically created. At that point, the events/time blocks will show up on your calendar permanently/outside of Noteplan, and you can drag them around in your calendar app like everyday calendar events (aka @Stacy-Fantastical combo). The Event Helpers plugin leaves critical parts of the Time Blocks in your Daily Calendar Note after creating the calendar events. 
+		- Note: unless a specific calendar name is specified (see below), the events will be written to your default system calendar (in Mac desktop Calendar app preferences)
+		- Pro Tip: If you set `createCalendarEntries` to `true` and `insertIntoEditor` to `false`, this plugin will (silently) create your Time Blocks as Calendar items, and you will have no remnants of the Time Blocks in your Daily Note. See below for an important note
+### "Delete previously entered time blocks" (default: false/unchecked; presetKey: "deletePreviousCalendarEntries")
+- Each time this plugin is run, if `createCalendarEntries` is set, it will create new events on the calendar. By default, it will not delete any calendar entries for Time Blocks that were made earlier in the day by this plugin. So, you could quickly end up with multiple copies of the same task on your calendar.
+- However, you may want the plugin to work just like Auto Time Blocks, first removing the previous blocks from today's calendar and replacing them with new, updated ones from now forward. Suppose that's what you want; set `deletePreviousCalendarEntries` to `true` each time the plugin is run. In that case, it will scan today's calendar, look for events placed on the calendar by this plugin previously, and delete those before re-assessing where time blocks should be placed and adding them to the calendar.
+- NOTE: What we don't have yet is the middle ground. The one thing it will *not* do is leave events on the calendar from **completed** tasks on previous runs of /atb. Everything from previous /atb runs stays or gets wiped clean, and you start fresh.  
+### Name of Calendar to write to (default: blank; presetKey: "calendarToWriteTo")
+- If you put a calendar name that corresponds to the name of a calendar that NotePlan has **write** access to, then when writing timeblocks as events to the calendar, it writes to the calendar with this name. Leaving the field blank writes to the default system calendar (see above)
+### Processed tag name (default: "#event_created"; presetKey: "eventEnteredOnCalTag")
+-  @jgclark's `/time blocks to calendar` command (and by extension, this plugin) tags events placed in the calendar with this field to separate your everyday calendar events from ones created by this or the EventHelpers plugin. This tag is used to identify the time block entries so they can be removed and re-drawn in the future.
+### Time block start interval (default: 5; presetKey: "intervalMins")
+- This controls the boundaries on which tasks can start. By default, a task can start on any 5m boundary. So if a meeting or another Time Block ends at 09:42, the next Time Block could start at 09:45. If you changed this setting to 15, each Time Block would only start on a 15, 30, 45, or 60.
+### Task→Time Block processing mode (default: "PRIORITY_FIRST"; presetKey: "mode")
+- Tasks are placed based on this mode setting. By default, priority tasks are placed first, then shorter tasks, then longer tasks. See Prioritizing section above.
+- Other modes of task ordering may come later based on user demand
+### Insert time blocks into note Editor (default: true/checked; presetKey: "insertIntoEditor")
+- By default, the plugin drops the Time Block lines into the Today Calendar Note in the NotePlan Editor. If you don't want to see the Time Blocks in your Today note (e.g., you want only to write the Time Blocks to your actual calendar as calendar entries), then you can set this to `false` and you will not see the Time Block text in your daily note
+### Presets (Expert Mode)
+- Presets provide a way to override the config settings for a particular command run temporarily. This is useful for patterns you want to repeat frequently, but not **every** time you run the plugin. An example is changing your weekend "work times" to different start/end times than your default workday times. You can invoke a preset by running the command: 
+	`/Create AutoTimeBlocks using presets` 
+	or if you prefer the shortcut: `/presets` (for AutoTimeBlock with Presets)
+- The variable key you need for each setting override is listed next to each preference setting above in the form of: `presetKey: "XXX"`
+- The plugin ships with a few default presets, which you can modify and add to. Note: this is JSON format. If you don’t know how to edit JSON, ask in the plugin-dev Discord channel.  For instance:
+
+|
+
+...
+
+[
+
+{ 
+
+label: 'Limit Time Blocks to Work Hours', 
+
+workDayStart: '08:00', 
+
+workDayEnd: '17:59' 
+
+},
+
+{
+
+label: 'Create Timeblocks on Calendar',
+
+createCalendarEntries: true,
+
+deletePreviousCalendarEntries: true,
+
+todoChar: '*',
+
+},
+
+]
+
+|- The "label" field is displayed in the Command Bar popup to choose a particular preset. All fields other than "label" temporarily override that specific field in the configuration for this command run. So, for instance, in the first example above, if you choose `"Limit Time Blocks to Work Hours"` from the presets menu after running the /presets command, the workDayStart would be set to 8 am. The workDayEnd will be set to just before 6 pm for this command run (everything else would stay as specified in your preferences). The last example would tell /atb to create the time blocks as actual calendar items rather than simply writing them to today's calendar note (I call this @stacey-mode).
+- If you need support on Presets, DM @dwertheimer on Discord
+
+## Synced Today Todos
+What if you want an editable synced-line copy of all `> today` items without automatic time blocks? Well, there's a command for that! `/Insert Synced Today Todos` will insert today's todos into the Editor under the heading specified in preferences. You can do this *with* TimeBlocking or on its own. **Note: you can run this on future dates and it will copy the synced lines for any items tagged with that particular date**
+
+## Removing Synced Lines from previous days
+You may not want to keep Synced Lines that were created by this plugin on previous days. It may just be clutter in your previous days' notes, and so, you can run one of two commands to remove previous Synced Lines:
+`/Remove Synced Todos for Open Calendar Note` (applies to the note currently open in the Editor) or
+`/Remove All Previous Synced Copies Written by this Plugin` (all previous Calendar notes)
+NOTE: This command can be run as a template tag, for instance, as part of your daily note:
+
+|
+
+<% await DataStore.invokePluginCommandByName("Remove All Previous Synced Copies Written by this Plugin","dwertheimer.EventAutomations",["yes"])  -%>
+
+|## Removing Synced Lines from previous days
+You may not want to keep Time Blocks that were created by this plugin on previous days. It may just be clutter in your previous days' notes, and so, you can run one of two commands to remove previous Time Blocks created by this plugin:
+`/Remove Time Blocks for Open Calendar Note` (applies to the note currently open in the Editor) or
+`/Remove All Previous Time Blocks in Calendar Notes Written by this Plugin` (all previous Calendar notes)
+NOTE: This command can be run as a template tag, for instance, as part of your daily note:
+
+|
+
+<% await DataStore.invokePluginCommandByName("Remove All Previous Time Blocks in Calendar Notes Written by this Plugin","dwertheimer.EventAutomations",["yes"])  -%>
+
+|`|
+
+
+    Create Events from Text
+
+When you're in the Editor and you want to add a bunch of items to the calendar, you can use the |/cevt| (Create Events from Text) command to convert all the items under a particular heading you choose into calendar items on your default calendar. The plugin will search all lines in the "block" under the chosen heading (e.g. all lines until a blank line, another title of greater value or a separator line).
+
+For example:
+
+becomes:
+
+and all those items are links to calendar entries on your default calendar
+
+
+    Misc Notes
+
+
+      Calendar Refreshing (events not showing up in the calendar outside of NotePlan)
+
+When you invoke the AutoTimeBlocking plugin (or event the EventHelpers plugin) to create actual events in your calendar, they show up inside NotePlan immediately. However, you may not see those events immediately on your calendar if you click over to your Apple Calendar (or Fantastical, Google Calendar, or another app). That is not a NotePlan issue as much as it's an iCal refresh setting. If you open up the Mac "Calendar" app, go to the "Calendar" menu item, and select "Accounts..." you can update your refresh settings. 
+
+After doing this, you should see all your TimeBlocks show up in under a minute. 
+
+
+      Hiding TimeBlockTag in your Theme
+
+Here's the entry you can put in your theme file to hide the default Time Block tag from view in your editor. If you don't know how to edit themes, go to https://help.noteplan.co/article/44-customize-themes <https://help.noteplan.co/article/44-customize-themes> (or Google "NotePlan Customize Themes")
+
+|    "Timeblock-HideTag": {
+      "color": "#8FBCBB",
+      "regex": "\\s#🕑", 
+      "matchPosition": 0,
+      "type": "nolink",
+      "isHiddenWithoutCursor": true,
+      "isRevealOnCursorRange": true,
+    },
+
+|
+
+
+    Roadmap - Some things we're considering based on user demand
+
+  * //end-forward time blocking Discord <https://discord.com/channels/763107030223290449/776544995947577345/1090030281051869274>
+
+  * //### Unassigned Tasks (tasks that there wasn't enough time for during the day)
+
+  * //Splitting tasks - have a way to say "don't split me" Discord <https://discord.com/channels/763107030223290449/984925384875339876/1013931997992849420> maybe ~2h means splittable
+
+  * //Allow for "soft-circle" times: Discord <https://discord.com/channels/763107030223290449/984925384875339876/1007290729300758589>
+
+  * //create documentation for presets
+
+  * //create a setting to include all tasks in today’s note
+
+  * //think about adding "< x days ago" - @daysago(20) or [<20 days ago](linktothatday'snote
+
+  * //Create interactive versions that ask for either:
+
+  * //an end time
+
+  * //an includeTasksWithText string (e.g. #fix) 
+
+  * //Create an "ASK" preset (e.g., ask for each string)
+
+  * //Events-to-calendar: items that were completed and are on the calendar stay on the calendar, but all else is erased and moved/new times created
+
+  * //AutoTimeBlocking for future dates...e.g., planning Time Blocks now/tonight for tomorrow. You can only run the command on Today's calendar/Calendar Note for Today.
+
+  * //Other |mode| settings for Task prioritization (e.g., Largest first, etc.)
+
+  * //Separate the creation and deleting of calendar entries so that |deletePreviousCalendarEntries| applies only to items created by this plugin and not EventHelpers
+
+  * //Remove priorities (!!!) from the timeblock text
+
+  * //Auto Timeblock for tasks that are in today's note (even ones that are not marked as > today)
+
+  * //Per @pan  compatibility would be better if natural language was supported: '1h: 1hr, '1hour    '30m: '30min,30minutes or 30minute    '1h30m:  '1h 30m
+
+  * //Allow user to set heading level of Time Blocks header (@stacey suggestion)
+
+  * //Allow sorting of priorities so that one exclamation is a top priority
+
+  * //Drag/drop as prioritization order (order on the page)
+
+  * //Summary/Shutdown Mode: See Stacey's video: https://drive.google.com/file/d/1-uTqEGeZvC_QJ7sX9MzGWjMCbrxi7XVn/view?usp=sharing <https://drive.google.com/file/d/1-uTqEGeZvC_QJ7sX9MzGWjMCbrxi7XVn/view?usp=sharing>
+
+  * //Add up the time of timeblocks - and display where?
+
+
