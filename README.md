@@ -26,7 +26,7 @@ What is implemented today:
 - ordering of active-note tasks by Obsidian Tasks priority markers before generating blocks, using `🔺`, `⏫`, `🔼`, no marker, `🔽`, and `⏬` from highest to lowest
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
 - generated output written under a configurable heading in the current note
-- generated blocks limited to the configured work day, with automatic scheduling able to either start at the next snapped interval or immediately from the current time
+- generated blocks limited to the configured work day, with automatic scheduling able to either start at the next snapped interval or immediately from the current time when planning today, while non-today notes begin from the configured day start time
 - optional splitting of automatically scheduled tasks across multiple free gaps in the day
 - optional break buffers between generated blocks
 - optional plugin-owned remote calendars that are treated as busy time during scheduling

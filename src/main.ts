@@ -259,7 +259,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const { busyRanges, failedCalendarCount } =
       await this.getCalendarPreviewData(planningDate, false);
-    const generatedTimeBlocks = this.buildTimeBlockLines(tasks, busyRanges);
+    const generatedTimeBlocks = this.buildTimeBlockLines(
+      tasks,
+      busyRanges,
+      planningDate,
+    );
 
     if (generatedTimeBlocks.scheduledLines.length === 0) {
       new Notice(
@@ -438,6 +442,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private buildTimeBlockLines(
     tasks: ParsedTask[],
     busyRanges: TimeRange[],
+    planningDate: Date,
   ): GeneratedTimeBlocks {
     const scheduledLines: string[] = [];
     const unscheduledLines: string[] = [];
@@ -452,7 +457,8 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           (leftTask.manualStartMinutes ?? 0) -
           (rightTask.manualStartMinutes ?? 0),
       );
-    let currentAutomaticStartMinutes = this.getInitialStartMinutes();
+    let currentAutomaticStartMinutes =
+      this.getInitialStartMinutes(planningDate);
     const configuredDayStartMinutes = this.parseTimeToMinutes(
       this.settings.dayStartTime,
     );
@@ -583,10 +589,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return renderedLines;
   }
 
-  private getInitialStartMinutes(): number {
+  private getInitialStartMinutes(planningDate: Date): number {
     const configuredStartMinutes = this.parseTimeToMinutes(
       this.settings.dayStartTime,
     );
+    if (!this.isSameLocalDate(this.getTodayDate(), planningDate)) {
+      return configuredStartMinutes;
+    }
+
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const startingMinutes =
@@ -908,6 +918,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private getTodayDate(): Date {
     const today = new Date();
     return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  }
+
+  private isSameLocalDate(leftDate: Date, rightDate: Date): boolean {
+    return (
+      leftDate.getFullYear() === rightDate.getFullYear() &&
+      leftDate.getMonth() === rightDate.getMonth() &&
+      leftDate.getDate() === rightDate.getDate()
+    );
   }
 
   normalizeRemoteCalendarUrl(value: string): string {
