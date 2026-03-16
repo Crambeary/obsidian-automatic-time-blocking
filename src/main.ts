@@ -6,6 +6,18 @@ import {
   PluginSettingTab,
   Setting,
 } from "obsidian";
+
+type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
+
+const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
+  highest: 6,
+  high: 5,
+  medium: 4,
+  none: 3,
+  low: 2,
+  lowest: 1,
+};
+
 interface ObsidianAutomaticTimeBlockingSettings {
   plannerHeading: string;
   plannerHeadingLevel: number;
@@ -30,6 +42,7 @@ interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAu
 interface ParsedTask {
   text: string;
   durationMinutes: number;
+  priority: TaskPriority;
 }
 
 interface GeneratedTimeBlocks {
@@ -147,10 +160,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       tasks.push({
         text: this.cleanTaskText(rawText),
         durationMinutes,
+        priority: this.parseTaskPriority(rawText),
       });
     }
 
-    return tasks;
+    return tasks.sort(
+      (leftTask, rightTask) =>
+        this.getTaskPriorityRank(rightTask.priority) -
+        this.getTaskPriorityRank(leftTask.priority),
+    );
   }
 
   private parseDurationMinutes(taskText: string): number {
@@ -163,6 +181,34 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return parsedDuration;
+  }
+
+  private parseTaskPriority(taskText: string): TaskPriority {
+    if (taskText.includes("🔺")) {
+      return "highest";
+    }
+
+    if (taskText.includes("⏫")) {
+      return "high";
+    }
+
+    if (taskText.includes("🔼")) {
+      return "medium";
+    }
+
+    if (taskText.includes("🔽")) {
+      return "low";
+    }
+
+    if (taskText.includes("⏬")) {
+      return "lowest";
+    }
+
+    return "none";
+  }
+
+  private getTaskPriorityRank(priority: TaskPriority): number {
+    return TASK_PRIORITY_RANKS[priority];
   }
 
   private cleanTaskText(taskText: string): string {
