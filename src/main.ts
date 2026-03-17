@@ -13,7 +13,6 @@ import {
 } from "obsidian";
 import moment from "moment";
 import { tz } from "moment-timezone";
-import ical from "node-ical";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
@@ -188,74 +187,105 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
   debugLogEntries: string[] = [];
+  startupStatus = "Not started";
 
   async onload() {
-    await this.loadSettings();
+    try {
+      this.startupStatus = "Loading settings";
+      this.appendDebugLog("Startup: loading settings");
+      await this.loadSettings();
 
-    this.addCommand({
-      id: "generate-time-blocks-from-active-note",
-      name: "Generate time blocks for active note",
-      checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view || !view.file) {
-          return false;
-        }
+      this.startupStatus = "Registering generate command";
+      this.appendDebugLog("Startup: registering generate command");
+      this.addCommand({
+        id: "generate-time-blocks-from-active-note",
+        name: "Generate time blocks for active note",
+        checkCallback: (checking: boolean) => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          if (!view || !view.file) {
+            return false;
+          }
 
-        if (!checking) {
-          void this.generateTimeBlocksForActiveNote();
-        }
+          if (!checking) {
+            void this.generateTimeBlocksForActiveNote();
+          }
 
-        return true;
-      },
-    });
+          return true;
+        },
+      });
 
-    this.addRibbonIcon("calendar-clock", "Generate time blocks", () => {
-      void this.generateTimeBlocksForActiveNote();
-    });
+      this.startupStatus = "Registering ribbon";
+      this.appendDebugLog("Startup: registering ribbon icon");
+      this.addRibbonIcon("calendar-clock", "Generate time blocks", () => {
+        void this.generateTimeBlocksForActiveNote();
+      });
 
-    this.addCommand({
-      id: "refresh-busy-calendars",
-      name: "Refresh busy calendars",
-      callback: () => {
-        void this.refreshBusyCalendarsForActiveNote();
-      },
-    });
+      this.startupStatus = "Registering calendar commands";
+      this.appendDebugLog("Startup: registering calendar commands");
+      this.addCommand({
+        id: "refresh-busy-calendars",
+        name: "Refresh busy calendars",
+        callback: () => {
+          void this.refreshBusyCalendarsForActiveNote();
+        },
+      });
 
-    this.addCommand({
-      id: "preview-busy-calendars-for-active-note",
-      name: "Preview busy calendars for active note",
-      checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view || !view.file) {
-          return false;
-        }
+      this.addCommand({
+        id: "preview-busy-calendars-for-active-note",
+        name: "Preview busy calendars for active note",
+        checkCallback: (checking: boolean) => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          if (!view || !view.file) {
+            return false;
+          }
 
-        if (!checking) {
-          void this.previewBusyCalendarsForActiveNote();
-        }
+          if (!checking) {
+            void this.previewBusyCalendarsForActiveNote();
+          }
 
-        return true;
-      },
-    });
+          return true;
+        },
+      });
 
-    this.addCommand({
-      id: "debug-dataview-discovery-for-active-note",
-      name: "Debug Dataview discovery for active note",
-      checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view || !view.file) {
-          return false;
-        }
+      this.addCommand({
+        id: "debug-dataview-discovery-for-active-note",
+        name: "Debug Dataview discovery for active note",
+        checkCallback: (checking: boolean) => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          if (!view || !view.file) {
+            return false;
+          }
 
-        if (!checking) {
-          void this.debugDataviewDiscoveryForActiveNote();
-        }
+          if (!checking) {
+            void this.debugDataviewDiscoveryForActiveNote();
+          }
 
-        return true;
-      },
-    });
+          return true;
+        },
+      });
 
-    this.addSettingTab(new AutomaticTimeBlockingSettingTab(this.app, this));
+      this.addCommand({
+        id: "open-debug-log",
+        name: "Open debug log",
+        callback: () => {
+          this.openDebugLog();
+        },
+      });
+
+      this.startupStatus = "Registering settings tab";
+      this.appendDebugLog("Startup: registering settings tab");
+      this.addSettingTab(new AutomaticTimeBlockingSettingTab(this.app, this));
+
+      this.startupStatus = "Ready";
+      this.appendDebugLog("Startup: plugin ready");
+    } catch (error) {
+      this.startupStatus = `Failed: ${this.formatErrorForDebug(error)}`;
+      this.appendDebugLog(`Startup failed: ${this.formatErrorForDebug(error)}`);
+      new Notice(
+        `Automatic Time Blocking failed to start: ${this.formatErrorForDebug(error)}`,
+      );
+      throw error;
+    }
   }
 
   onunload() {}
@@ -345,6 +375,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   clearDebugLog(): void {
     this.debugLogEntries = [];
+  }
+
+  private formatErrorForDebug(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error);
   }
 
   private async generateTimeBlocksForActiveNote() {
@@ -710,6 +748,31 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return this.debugLogEntries.join("\n\n");
+  }
+
+  private async loadNodeIcal(): Promise<{
+    parseICS: (rawCalendar: string) => Record<string, unknown>;
+  }> {
+    try {
+      const importedModule = await import("node-ical");
+      const candidate = (
+        "default" in importedModule ? importedModule.default : importedModule
+      ) as {
+        parseICS?: (rawCalendar: string) => Record<string, unknown>;
+      };
+
+      if (typeof candidate.parseICS !== "function") {
+        throw new Error("node-ical parseICS is unavailable");
+      }
+
+      return {
+        parseICS: candidate.parseICS.bind(candidate),
+      };
+    } catch (error) {
+      const formattedError = this.formatErrorForDebug(error);
+      this.appendDebugLog(`Calendar parser load failed: ${formattedError}`);
+      throw new Error(`Unable to load calendar parser: ${formattedError}`);
+    }
   }
 
   private getDataviewIndexedExternalTaskFiles(
@@ -1619,7 +1682,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         }
 
         const rawCalendar = response.text;
-        const extractionResult = this.extractBusyRangesFromIcs(
+        const extractionResult = await this.extractBusyRangesFromIcs(
           rawCalendar,
           planningDate,
         );
@@ -1641,13 +1704,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     };
   }
 
-  private extractBusyRangesFromIcs(
+  private async extractBusyRangesFromIcs(
     rawCalendar: string,
     planningDate: Date,
-  ): {
+  ): Promise<{
     busyRanges: CalendarBusyRange[];
     eventDiagnostics: CalendarEventDiagnostic[];
-  } {
+  }> {
     const dayStart = new Date(
       planningDate.getFullYear(),
       planningDate.getMonth(),
@@ -1658,8 +1721,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       0,
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const nodeIcal = await this.loadNodeIcal();
     const calendarEntries = Object.values(
-      ical.parseICS(rawCalendar) as Record<string, any>,
+      nodeIcal.parseICS(rawCalendar) as Record<string, any>,
     );
     const busyRanges: CalendarBusyRange[] = [];
     const eventDiagnostics: CalendarEventDiagnostic[] = [];
