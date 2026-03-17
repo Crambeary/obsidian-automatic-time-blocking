@@ -169,6 +169,8 @@ interface ParsedTaskTimeRange {
   durationMinutes: number;
 }
 
+const DEBUG_LOG_FILE_PATH = "Obsidian Automatic Time Blocking Debug Log.md";
+
 interface GeneratedTimeBlocks {
   scheduledLines: string[];
   unscheduledLines: string[];
@@ -188,6 +190,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
   debugLogEntries: string[] = [];
   startupStatus = "Not started";
+  debugLogWritePromise: Promise<void> = Promise.resolve();
 
   async onload() {
     try {
@@ -375,6 +378,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   clearDebugLog(): void {
     this.debugLogEntries = [];
+    this.queueDebugLogWrite();
   }
 
   private formatErrorForDebug(error: unknown): string {
@@ -740,6 +744,8 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     if (this.debugLogEntries.length > 100) {
       this.debugLogEntries.splice(0, this.debugLogEntries.length - 100);
     }
+
+    this.queueDebugLogWrite();
   }
 
   private getDebugLogText(): string {
@@ -748,6 +754,18 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return this.debugLogEntries.join("\n\n");
+  }
+
+  private queueDebugLogWrite(): void {
+    this.debugLogWritePromise = this.debugLogWritePromise
+      .catch(() => undefined)
+      .then(async () => {
+        const logText = this.getDebugLogText();
+        await this.app.vault.adapter.write(DEBUG_LOG_FILE_PATH, logText);
+      })
+      .catch((error) => {
+        console.error("Failed to persist debug log", error);
+      });
   }
 
   private async loadNodeIcal(): Promise<{
