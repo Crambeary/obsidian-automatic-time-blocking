@@ -237,6 +237,7 @@ Current behavior:
 - tasks without a manual start time are still scheduled automatically using the existing priority ordering rules
 - automatic scheduling can either begin at the next snapped interval boundary or at the current time, based on settings
 - when enabled, automatic scheduling can split a task across multiple open gaps instead of skipping it when one continuous slot is unavailable
+- when enabled, split scheduling keeps any segments that fit in the remaining day even if the full requested duration cannot be placed
 - when enabled, a break buffer is reserved after each generated block before another generated block can begin
 - if remote calendars are configured, generated tasks avoid overlapping matching calendar events on the planning day
 - when enabled, separate before and after meeting buffers expand those remote calendar busy windows before automatic scheduling looks for open time

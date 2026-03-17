@@ -198,11 +198,17 @@ interface GeneratedTimeBlocks {
   unscheduledLines: string[];
   scheduledTaskCount: number;
   skippedTaskCount: number;
+  partiallyScheduledTaskCount: number;
 }
 
 interface ScheduledTaskSegment {
   startMinutes: number;
   endMinutes: number;
+}
+
+interface ScheduledTaskSegmentsResult {
+  segments: ScheduledTaskSegment[];
+  isPartial: boolean;
 }
 
 type ExternalSourceSelection = TFile | TFolder;
@@ -1089,9 +1095,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const generatedCount = generatedTimeBlocks.scheduledTaskCount;
     const skippedCount = generatedTimeBlocks.skippedTaskCount;
+    const partiallyScheduledCount =
+      generatedTimeBlocks.partiallyScheduledTaskCount;
     const skippedSuffix =
       skippedCount > 0
         ? ` Skipped ${skippedCount} task${skippedCount === 1 ? "" : "s"} that would exceed the configured work day.`
+        : "";
+    const partialSuffix =
+      partiallyScheduledCount > 0
+        ? ` Partially scheduled ${partiallyScheduledCount} task${partiallyScheduledCount === 1 ? "" : "s"} because the full duration did not fit in the available gaps.`
         : "";
     const calendarSuffix =
       failedCalendarCount > 0
@@ -1108,7 +1120,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${skippedSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${partialSuffix}${skippedSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
     );
   }
 
@@ -1854,6 +1866,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const scheduledLines: string[] = [];
     const unscheduledLines: string[] = [];
     let scheduledTaskCount = 0;
+    let partiallyScheduledTaskCount = 0;
     const automaticTasks = tasks.filter(
       (task) => task.manualStartMinutes === null,
     );
@@ -1909,20 +1922,24 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     for (const task of automaticTasks) {
-      const scheduledSegments = this.scheduleAutomaticTaskSegments(
+      const scheduledResult = this.scheduleAutomaticTaskSegments(
         task,
         currentAutomaticStartMinutes,
         occupiedRanges,
         workDayEndMinutes,
       );
+      const scheduledSegments = scheduledResult?.segments ?? [];
 
-      if (scheduledSegments === null || scheduledSegments.length === 0) {
+      if (scheduledSegments.length === 0) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
 
       scheduledTaskCount += 1;
+      if (scheduledResult?.isPartial) {
+        partiallyScheduledTaskCount += 1;
+      }
       for (const [
         segmentIndex,
         scheduledSegment,
@@ -1949,6 +1966,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       unscheduledLines,
       scheduledTaskCount,
       skippedTaskCount,
+      partiallyScheduledTaskCount,
     };
   }
 
@@ -2192,7 +2210,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     proposedStartMinutes: number,
     occupiedRanges: TimeRange[],
     workDayEndMinutes: number,
-  ): ScheduledTaskSegment[] | null {
+  ): ScheduledTaskSegmentsResult | null {
     const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
 
     if (!this.settings.splitTasksAcrossGaps) {
@@ -2216,12 +2234,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         endMinutes: scheduledEndMinutes + breakDurationMinutes,
       });
 
-      return [
-        {
-          startMinutes: scheduledStartMinutes,
-          endMinutes: scheduledEndMinutes,
-        },
-      ];
+      return {
+        segments: [
+          {
+            startMinutes: scheduledStartMinutes,
+            endMinutes: scheduledEndMinutes,
+          },
+        ],
+        isPartial: false,
+      };
     }
 
     const candidateOccupiedRanges = occupiedRanges.map((range) => ({
@@ -2239,14 +2260,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       );
 
       if (availableWindow.endMinutes <= availableWindow.startMinutes) {
-        return null;
+        break;
       }
 
       const availableDurationMinutes =
         availableWindow.endMinutes - availableWindow.startMinutes;
 
       if (availableDurationMinutes <= 0) {
-        return null;
+        break;
       }
 
       const scheduledDurationMinutes = Math.min(
@@ -2264,6 +2285,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       nextProposedStartMinutes = scheduledSegment.endMinutes;
     }
 
+    if (scheduledSegments.length === 0) {
+      return null;
+    }
+
     const finalScheduledSegment =
       scheduledSegments[scheduledSegments.length - 1];
     this.insertTimeRange(candidateOccupiedRanges, {
@@ -2271,7 +2296,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       endMinutes: finalScheduledSegment.endMinutes + breakDurationMinutes,
     });
     occupiedRanges.splice(0, occupiedRanges.length, ...candidateOccupiedRanges);
-    return scheduledSegments;
+    return {
+      segments: scheduledSegments,
+      isPartial: remainingDurationMinutes > 0,
+    };
   }
 
   private parseManualStartMinutes(taskText: string): number | null {
