@@ -3413,12 +3413,21 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   }
 
   private reopenTaskLine(originalLine: string): string {
-    return originalLine
-      .replace(/^(\s*[-*]\s+)\[x\](\s+.*)$/i, "$1[ ]$2")
+    const reopenedLine = originalLine.replace(
+      /^(\s*[-*]\s+)\[x\](\s+.*)$/i,
+      "$1[ ]$2",
+    );
+    const reopenedMatch = reopenedLine.match(/^(\s*[-*]\s+\[ \])(\s+.*)$/);
+    if (!reopenedMatch) {
+      return reopenedLine.trimEnd();
+    }
+
+    const normalizedTaskBody = reopenedMatch[2]
       .replace(/(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?(?=\s|$)/g, "")
       .replace(/\s+/g, " ")
-      .replace(/^(\s*[-*]\s+\[ \])\s*/, "$1 ")
-      .trimEnd();
+      .trim();
+
+    return `${reopenedMatch[1]} ${normalizedTaskBody}`.trimEnd();
   }
 
   private normalizeTaskFingerprint(value: string): string {
