@@ -135,7 +135,7 @@ interface ParsedTask {
   durationMinutes: number;
   priority: TaskPriority;
   manualStartMinutes: number | null;
-  statusMarker: " " | "/" | ">";
+  statusMarker: " ";
   indent: number;
   sourcePath: string;
   sourceLineNumber: number;
@@ -361,7 +361,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     if (tasks.length === 0) {
       new Notice(
-        "No open or in-progress tasks matched the active note or configured external source notes for this planning date.",
+        "No open tasks matched the active note or configured external source notes for this planning date.",
       );
       return;
     }
@@ -509,12 +509,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      const taskMatch = line.match(/^\s*[-*]\s+\[( |\/|>)\]\s+(.*)$/);
+      const taskMatch = line.match(/^\s*[-*]\s+\[( )\]\s+(.*)$/);
       if (!taskMatch) {
         continue;
       }
 
-      const indentMatch = line.match(/^(\s*)[-*]\s+\[( |\/|>)\]\s+/);
+      const indentMatch = line.match(/^(\s*)[-*]\s+\[( )\]\s+/);
       const rawText = taskMatch[2].trim();
       const parsedTimeRange = this.parseExplicitTaskTimeRange(rawText);
       const durationMinutes =
@@ -526,7 +526,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         manualStartMinutes:
           parsedTimeRange?.startMinutes ??
           this.parseManualStartMinutes(rawText),
-        statusMarker: taskMatch[1] as " " | "/" | ">",
+        statusMarker: taskMatch[1] as " ",
         indent: indentMatch?.[1].length ?? 0,
         sourcePath,
         sourceLineNumber: index + 1,
