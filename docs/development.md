@@ -149,6 +149,7 @@ The current prototype supports:
 - priority ordering based on Obsidian Tasks priority markers, from highest to lowest, with unmarked tasks between medium and low priority
 - writing generated blocks under a configurable heading in the active note, including configurable heading level and heading text
 - snapping generated block start times to a configurable interval and skipping tasks that would exceed the configured work day
+- Dataview mode uses Dataview's whole-vault index for external task discovery, while built-in mode remains the scoped note-and-folder fallback
 
 It does not yet implement:
 

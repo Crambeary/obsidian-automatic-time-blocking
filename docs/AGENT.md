@@ -112,8 +112,8 @@ When implementing source support, prefer explicit filtering rules over implicit 
 
 For external-note discovery, prefer this order unless the user says otherwise:
 
-- use Dataview as the preferred discovery path when it is installed and can provide indexed task lookup
-- avoid full-vault scans during normal command execution
+- use Dataview as the preferred discovery path when it is installed and can provide whole-vault indexed task lookup
+- allow Dataview mode to use its vault-wide index during normal command execution
 - provide plugin-managed selection of a limited set of folders or files as the fallback source scope
 - use Tasks-style scheduled and due dates as the first inclusion rule for matching a task to the planning note date
 - preserve source metadata so future generated lines can link back to the original task location

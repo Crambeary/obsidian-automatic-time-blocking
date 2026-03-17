@@ -19,9 +19,9 @@ What is implemented today:
 - a command named `Generate time blocks for active note`
 - parsing of open or in-progress Markdown task lines from the active note
 - optional intake from configured external Markdown notes or folders, limited to explicit user-selected source paths rather than whole-vault scanning
-- Dataview-backed indexed discovery for configured external notes and folders when the Dataview plugin is installed, with the existing scoped file and folder scan retained as fallback when it is not
+- Dataview-backed indexed discovery across the whole vault when the Dataview plugin is installed, with the existing scoped file and folder scan retained as the built-in fallback
 - when `Built-in` task discovery is selected, the configured external note and folder pickers are shown and used during planning
-- when `Dataview` task discovery is selected, those built-in source pickers are hidden from the settings UI and ignored during planning
+- when `Dataview` task discovery is selected, those built-in source pickers are hidden from the settings UI and the plugin relies on Dataview's vault-wide index instead
 - generated planner lines for external-source tasks preserve a compact Obsidian backlink to the source note so you can jump back to where the task came from
 - preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
@@ -93,7 +93,7 @@ The current intended direction for external-note discovery is:
 
 Current prototype behavior for this area:
 
-- external-note discovery now prefers Dataview indexed lookup within the configured file and folder scope when Dataview is installed
+- external-note discovery now prefers Dataview indexed lookup across the vault when Dataview is installed
 - when Dataview is unavailable, external-note discovery falls back to the existing plugin-managed file and folder scan
 - the settings UI exposes this choice as a task discovery mode, so you can explicitly switch between built-in scoped discovery and Dataview-based indexed discovery
 - the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due, scheduled, or start date token on or before the planning note date
@@ -166,7 +166,7 @@ Implemented today:
 - a grouped task discovery settings section with a `Built-in` versus `Dataview` mode selector
 - active-note task parsing for open or in-progress Markdown tasks
 - optional scoped external-note task discovery from configured note and folder paths
-- Dataview-backed indexed discovery of matching external source files when Dataview is installed, limited to the same configured note and folder scope
+- Dataview-backed indexed discovery of matching external source files across the vault when Dataview is installed
 - generated planner lines for external tasks append a compact backlink to the source note
 - preservation of open versus in-progress task markers in generated planner lines
 - exclusion of tasks already inside the configured planner heading when gathering source tasks, so reruns replace the generated plan instead of duplicating it
