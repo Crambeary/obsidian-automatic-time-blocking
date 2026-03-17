@@ -14,7 +14,7 @@ The plugin files now live at the repository root rather than inside a nested `ob
 
 What is implemented today:
 
-- a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, and break duration between generated blocks
+- a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, break duration between generated blocks, and separate before/after meeting buffers for remote calendar busy events
 - a grouped task discovery settings section with a mode selector for `Built-in` versus `Dataview`
 - a command named `Generate time blocks for active note`
 - parsing of open or in-progress Markdown task lines from the active note
@@ -24,18 +24,13 @@ What is implemented today:
 - when `Dataview` task discovery is selected, those built-in source pickers are hidden from the settings UI and ignored during planning
 - generated planner lines for external-source tasks preserve a compact Obsidian backlink to the source note so you can jump back to where the task came from
 - preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
-- NotePlan-like rerun behavior for the active note: source tasks are read from outside the generated planner section, and rerunning the command replaces that section with a fresh plan instead of scheduling previously generated block lines again
-- preservation of nested open subtasks under their parent task when generated output is written back to the note
-- duration markers in the form `[30m]` or `@30m`
-- manual task start times in `HH:MM` 24-hour format, such as `13:00`, with optional duration markers like `@45m`
-- preservation of duration markers on generated time-block lines, so task text like `Task @60m` stays visible after scheduling
-- ordering of active-note tasks by Obsidian Tasks priority markers before generating blocks, using `🔺`, `⏫`, `🔼`, no marker, `🔽`, and `⏬` from highest to lowest
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
 - generated output written under a configurable heading in the current note
 - generated blocks limited to the configured work day, with automatic scheduling able to either start at the next snapped interval or immediately from the current time when planning today, while non-today notes begin from the configured day start time
 - optional splitting of automatically scheduled tasks across multiple free gaps in the day
 - optional break buffers between generated blocks
 - optional plugin-owned remote calendars that are treated as busy time during scheduling
+- optional separate meeting buffers before and after remote calendar busy events, so generated task blocks can leave transition time around meetings
 - optional ignored calendar event patterns, matched case-insensitively against event titles, so selected recurring calendar events do not block scheduling
 - external-note date matching for planning-note intake using Tasks-style due, scheduled, and start markers such as `📅 2026-03-16`, `⏳ 2026-03-16`, `🛫 2026-03-16`, or a plain `>2026-03-16` token in the task text, with overdue dated tasks included when the marked date is on or before the planning note date
 - when those date markers are rendered into generated planner lines, the emoji stays visible as normal text and the date portion is wrapped in inline code so Day Planner does not reinterpret it as a different planning date
@@ -104,7 +99,7 @@ Current prototype behavior for this area:
 - the plugin reads Markdown tasks from those configured sources and includes only open or in-progress tasks whose text contains a due, scheduled, or start date token on or before the planning note date
 - current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, `🛫 YYYY-MM-DD`, and `>YYYY-MM-DD`
 - generated planner lines for external tasks append a compact `[[note|↗]]` backlink to the source note
-- generated planner lines keep `📅`, `⏳`, and `�` visible as plain text while wrapping the detected date text in inline code for Day Planner compatibility
+- generated planner lines keep `📅`, `⏳`, and `🛫` visible as plain text while wrapping the detected date text in inline code for Day Planner compatibility
 
 Exact parsing and prioritization rules are still being designed.
 
@@ -143,6 +138,24 @@ npm run build
 
 Note: if you use hot reloading in Obsidian, you may also need the related hot-reload plugin enabled in your vault.
 
+## GitHub Releases For BRAT
+
+This repository includes a GitHub Actions release workflow that builds the plugin and attaches the compiled plugin files to a GitHub release in a BRAT-compatible format.
+
+Current release assets:
+
+- `dist/main.js`
+- `dist/manifest.json`
+
+To publish a BRAT-compatible release:
+
+- update the version in `manifest.json` and `package.json`
+- commit and push that version change
+- create and push a Git tag such as `v0.0.2`
+- let GitHub Actions build the plugin and publish the release assets automatically
+
+BRAT can install the plugin from the repository's GitHub releases once those built files are attached to the release.
+
 ## Current Code Reality
 
 The repository now contains a small but real prototype rather than only scaffold code.
@@ -164,7 +177,7 @@ Implemented today:
 - external tasks from configured source notes or folders are included when their text carries a due, scheduled, or start date marker on or before the active note date
 - generated planner output keeps `📅`, `⏳`, and `🛫` visible while wrapping the detected date text in inline code so Day Planner keeps them on the current day instead of moving them
 - generation of simple sequential time blocks into a configurable heading
-- configurable work-day bounds, automatic start behavior, optional split scheduling across gaps, optional breaks between generated blocks, and start-interval snapping for generated blocks
+- configurable work-day bounds, automatic start behavior, optional split scheduling across gaps, optional breaks between generated blocks, separate before/after meeting buffers for remote calendar busy events, and start-interval snapping for generated blocks
 - optional avoidance of busy windows from configured remote calendars
 - optional event-title ignore patterns for calendar events you do not want to block around
 - remote calendars are configured in grouped settings rows, with an `Add remote calendar` button similar to the Day Planner-style internet calendar setup flow
@@ -196,6 +209,7 @@ Current behavior:
 - when enabled, automatic scheduling can split a task across multiple open gaps instead of skipping it when one continuous slot is unavailable
 - when enabled, a break buffer is reserved after each generated block before another generated block can begin
 - if remote calendars are configured, generated tasks avoid overlapping matching calendar events on the planning day
+- when enabled, separate before and after meeting buffers expand those remote calendar busy windows before automatic scheduling looks for open time
 
 Current calendar limitations:
 

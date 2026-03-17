@@ -101,6 +101,8 @@ interface ObsidianAutomaticTimeBlockingSettings {
   automaticStartMode: AutomaticStartMode;
   splitTasksAcrossGaps: boolean;
   breakDurationMinutes: number;
+  meetingBufferBeforeMinutes: number;
+  meetingBufferAfterMinutes: number;
   remoteCalendarUrls: string[];
   ignoredCalendarEventPatterns: string;
   externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
@@ -118,6 +120,8 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   automaticStartMode: "snapped",
   splitTasksAcrossGaps: false,
   breakDurationMinutes: 0,
+  meetingBufferBeforeMinutes: 0,
+  meetingBufferAfterMinutes: 0,
   remoteCalendarUrls: [],
   ignoredCalendarEventPatterns: "",
   externalTaskDiscoveryMode: "built-in",
@@ -632,7 +636,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       ).filter((task) =>
         this.externalTaskMatchesPlanningDate(task.text, planningDate),
       );
-
       matchingExternalTaskCount += sourceTasks.length;
       for (const task of sourceTasks) {
         if (matchingTaskSummaries.length >= 10) {
@@ -1247,6 +1250,26 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return breakDuration;
   }
 
+  private getValidatedMeetingBufferBeforeMinutes(): number {
+    const meetingBuffer = Math.floor(this.settings.meetingBufferBeforeMinutes);
+
+    if (!Number.isFinite(meetingBuffer) || meetingBuffer < 0) {
+      return DEFAULT_SETTINGS.meetingBufferBeforeMinutes;
+    }
+
+    return meetingBuffer;
+  }
+
+  private getValidatedMeetingBufferAfterMinutes(): number {
+    const meetingBuffer = Math.floor(this.settings.meetingBufferAfterMinutes);
+
+    if (!Number.isFinite(meetingBuffer) || meetingBuffer < 0) {
+      return DEFAULT_SETTINGS.meetingBufferAfterMinutes;
+    }
+
+    return meetingBuffer;
+  }
+
   private normalizeTimeRanges(ranges: TimeRange[]): TimeRange[] {
     const sortedRanges = ranges
       .filter((range) => range.endMinutes > range.startMinutes)
@@ -1311,9 +1334,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         return nextStartMinutes;
       }
 
-      nextStartMinutes = this.snapMinutesToInterval(
-        overlappingRange.endMinutes,
-      );
+      nextStartMinutes = overlappingRange.endMinutes;
     }
 
     return workDayEndMinutes;
@@ -1334,9 +1355,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       );
 
       if (containingRange) {
-        nextStartMinutes = this.snapMinutesToInterval(
-          containingRange.endMinutes,
-        );
+        nextStartMinutes = containingRange.endMinutes;
         continue;
       }
 
@@ -1534,6 +1553,8 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return [
       this.formatDateKey(planningDate),
       this.settings.remoteCalendarUrls.join("\n"),
+      String(this.getValidatedMeetingBufferBeforeMinutes()),
+      String(this.getValidatedMeetingBufferAfterMinutes()),
       this.settings.ignoredCalendarEventPatterns,
     ].join("::");
   }
@@ -1971,7 +1992,22 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private normalizeCalendarBusyRanges(
     ranges: CalendarBusyRange[],
   ): CalendarBusyRange[] {
+    const meetingBufferBeforeMinutes =
+      this.getValidatedMeetingBufferBeforeMinutes();
+    const meetingBufferAfterMinutes =
+      this.getValidatedMeetingBufferAfterMinutes();
     const sortedRanges = ranges
+      .map((range) => ({
+        ...range,
+        startMinutes: Math.max(
+          0,
+          range.startMinutes - meetingBufferBeforeMinutes,
+        ),
+        endMinutes: Math.min(
+          1440,
+          range.endMinutes + meetingBufferAfterMinutes,
+        ),
+      }))
       .filter((range) => range.endMinutes > range.startMinutes)
       .sort(
         (leftRange, rightRange) =>
@@ -2696,6 +2732,44 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
               Number.isFinite(parsedValue) && parsedValue >= 0
                 ? parsedValue
                 : DEFAULT_SETTINGS.breakDurationMinutes;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Meeting buffer before busy events")
+      .setDesc(
+        "Minutes of buffer to reserve before each remote calendar busy event when scheduling generated blocks.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("0")
+          .setValue(String(this.plugin.settings.meetingBufferBeforeMinutes))
+          .onChange(async (value) => {
+            const parsedValue = Number(value);
+            this.plugin.settings.meetingBufferBeforeMinutes =
+              Number.isFinite(parsedValue) && parsedValue >= 0
+                ? parsedValue
+                : DEFAULT_SETTINGS.meetingBufferBeforeMinutes;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Meeting buffer after busy events")
+      .setDesc(
+        "Minutes of buffer to reserve after each remote calendar busy event when scheduling generated blocks.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("0")
+          .setValue(String(this.plugin.settings.meetingBufferAfterMinutes))
+          .onChange(async (value) => {
+            const parsedValue = Number(value);
+            this.plugin.settings.meetingBufferAfterMinutes =
+              Number.isFinite(parsedValue) && parsedValue >= 0
+                ? parsedValue
+                : DEFAULT_SETTINGS.meetingBufferAfterMinutes;
             await this.plugin.saveSettings();
           }),
       );
