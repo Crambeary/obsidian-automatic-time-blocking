@@ -1176,7 +1176,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return {
-      files: [],
+      files: this.getScopedExternalTaskFiles(activeFile),
       usedDataviewIndex: false,
     };
   }
