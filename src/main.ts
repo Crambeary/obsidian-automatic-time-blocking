@@ -163,6 +163,11 @@ interface CompletionSyncMapping {
   sourceFingerprint: string;
 }
 
+interface SameNoteSyncSnapshotEntry {
+  plannerStatus: PlannerTaskSyncStatus;
+  sourceStatus: PlannerTaskSyncStatus;
+}
+
 interface TaskCollectionResult {
   tasks: ParsedTask[];
   externalSourceFileCount: number;
@@ -186,8 +191,6 @@ interface ParsedTaskTimeRange {
   durationMinutes: number;
 }
 
-const DEBUG_LOG_FILE_PATH = "Obsidian Automatic Time Blocking Debug Log.md";
-
 interface GeneratedTimeBlocks {
   scheduledLines: string[];
   unscheduledLines: string[];
@@ -205,10 +208,13 @@ type ExternalSourceSelection = TFile | TFolder;
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
   completionSyncMappings: Record<string, CompletionSyncMapping[]> = {};
+  sameNoteSyncSnapshots = new Map<
+    string,
+    Map<string, SameNoteSyncSnapshotEntry>
+  >();
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
   debugLogEntries: string[] = [];
   startupStatus = "Not started";
-  debugLogWritePromise: Promise<void> = Promise.resolve();
   ignoredModifyPaths = new Set<string>();
   momentRuntime: {
     moment: (value?: Date) => {
@@ -391,7 +397,18 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     try {
-      await this.syncCompletedPlannerTasksToSource(file);
+      const hasSameNoteMappings = (
+        this.completionSyncMappings[file.path] ?? []
+      ).some((mapping) => mapping.sourcePath === file.path);
+      if (hasSameNoteMappings) {
+        this.appendDebugLog(
+          `Completion sync for ${file.path}: running directional same-note mode before cross-note sync`,
+        );
+        await this.syncSameNoteTaskStates(file);
+        await this.refreshSameNoteSyncSnapshot(file.path);
+      }
+      await this.syncCompletedPlannerTasksToSource(file, !hasSameNoteMappings);
+      await this.syncSourceTasksToPlanningNotes(file);
     } catch (error) {
       this.appendDebugLog(
         `Completion sync failed for ${file.path}: ${this.formatErrorForDebug(error)}`,
@@ -399,7 +416,218 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
   }
 
-  private async syncCompletedPlannerTasksToSource(file: TFile): Promise<void> {
+  private async syncSameNoteTaskStates(file: TFile): Promise<void> {
+    const mappings = (this.completionSyncMappings[file.path] ?? []).filter(
+      (mapping) => mapping.sourcePath === file.path,
+    );
+    if (mappings.length === 0) {
+      return;
+    }
+
+    const previousSnapshot = this.sameNoteSyncSnapshots.get(file.path);
+    if (!previousSnapshot) {
+      return;
+    }
+
+    const currentSnapshot = await this.buildSameNoteSyncSnapshot(
+      file,
+      mappings,
+    );
+    const plannerDrivenStatuses = new Map<string, PlannerTaskSyncStatus>();
+    const sourceDrivenStatuses = new Map<string, PlannerTaskSyncStatus>();
+
+    for (const mapping of mappings) {
+      const previousEntry = previousSnapshot.get(mapping.plannerFingerprint);
+      const currentEntry = currentSnapshot.get(mapping.plannerFingerprint);
+      if (!previousEntry || !currentEntry) {
+        continue;
+      }
+
+      const plannerChanged =
+        previousEntry.plannerStatus !== currentEntry.plannerStatus;
+      const sourceChanged =
+        previousEntry.sourceStatus !== currentEntry.sourceStatus;
+      if (!plannerChanged && !sourceChanged) {
+        continue;
+      }
+
+      if (plannerChanged && !sourceChanged) {
+        plannerDrivenStatuses.set(
+          mapping.sourceFingerprint,
+          currentEntry.plannerStatus,
+        );
+        continue;
+      }
+
+      if (sourceChanged && !plannerChanged) {
+        sourceDrivenStatuses.set(
+          mapping.plannerFingerprint,
+          currentEntry.sourceStatus,
+        );
+      }
+    }
+
+    if (plannerDrivenStatuses.size > 0) {
+      const syncResult = await this.syncSourceTasksFromPlannerStates(
+        file,
+        plannerDrivenStatuses,
+      );
+      if (syncResult.completedCount > 0 || syncResult.reopenedCount > 0) {
+        this.appendDebugLog(
+          `Completion sync same-note planner-driven update for ${file.path}: completed=${syncResult.completedCount}, reopened=${syncResult.reopenedCount}`,
+        );
+      }
+    }
+
+    if (sourceDrivenStatuses.size > 0) {
+      const updatedPlanningTaskCount =
+        await this.syncPlanningNoteFromPlannerFingerprints(
+          file,
+          sourceDrivenStatuses,
+        );
+      if (updatedPlanningTaskCount > 0) {
+        this.appendDebugLog(
+          `Completion sync same-note source-driven update for ${file.path}: planner updates=${updatedPlanningTaskCount}`,
+        );
+      }
+    }
+  }
+
+  private async buildSameNoteSyncSnapshot(
+    file: TFile,
+    mappings: CompletionSyncMapping[],
+  ): Promise<Map<string, SameNoteSyncSnapshotEntry>> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
+    const plannerStatuses = new Map<string, PlannerTaskSyncStatus>();
+    if (plannerSectionRange) {
+      for (
+        let index = plannerSectionRange.start;
+        index < plannerSectionRange.end;
+        index += 1
+      ) {
+        const plannerTaskLine = this.parsePlannerTaskLine(lines[index]);
+        if (!plannerTaskLine) {
+          continue;
+        }
+
+        plannerStatuses.set(
+          plannerTaskLine.fingerprint,
+          plannerTaskLine.statusMarker.toLowerCase() === "x"
+            ? "completed"
+            : "active",
+        );
+      }
+    }
+
+    const sourceStatuses = new Map<string, PlannerTaskSyncStatus>();
+    for (const task of this.flattenTasks(
+      this.extractOpenTasks(content, file.path),
+    )) {
+      sourceStatuses.set(this.buildSourceTaskFingerprint(task), "active");
+    }
+
+    for (const task of this.flattenTasks(
+      this.extractCompletedTasks(content, file.path),
+    )) {
+      sourceStatuses.set(this.buildSourceTaskFingerprint(task), "completed");
+    }
+
+    const snapshot = new Map<string, SameNoteSyncSnapshotEntry>();
+    for (const mapping of mappings) {
+      const plannerStatus = plannerStatuses.get(mapping.plannerFingerprint);
+      const sourceStatus = sourceStatuses.get(mapping.sourceFingerprint);
+      if (!plannerStatus || !sourceStatus) {
+        continue;
+      }
+
+      snapshot.set(mapping.plannerFingerprint, { plannerStatus, sourceStatus });
+    }
+
+    return snapshot;
+  }
+
+  private async refreshSameNoteSyncSnapshot(
+    planningNotePath: string,
+  ): Promise<void> {
+    const mappings = (
+      this.completionSyncMappings[planningNotePath] ?? []
+    ).filter((mapping) => mapping.sourcePath === planningNotePath);
+    if (mappings.length === 0) {
+      this.sameNoteSyncSnapshots.delete(planningNotePath);
+      return;
+    }
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(planningNotePath);
+    if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md") {
+      this.sameNoteSyncSnapshots.delete(planningNotePath);
+      return;
+    }
+
+    this.sameNoteSyncSnapshots.set(
+      planningNotePath,
+      await this.buildSameNoteSyncSnapshot(abstractFile, mappings),
+    );
+  }
+
+  private async syncSourceTasksToPlanningNotes(file: TFile): Promise<void> {
+    const planningEntries = Object.entries(this.completionSyncMappings).filter(
+      ([, mappings]) =>
+        mappings.some((mapping) => mapping.sourcePath === file.path),
+    );
+    if (planningEntries.length === 0) {
+      return;
+    }
+
+    const sourceContent = await this.app.vault.read(file);
+    const sourceStatuses = new Map<string, PlannerTaskSyncStatus>();
+
+    for (const task of this.flattenTasks(
+      this.extractOpenTasks(sourceContent, file.path),
+    )) {
+      sourceStatuses.set(this.buildSourceTaskFingerprint(task), "active");
+    }
+
+    for (const task of this.flattenTasks(
+      this.extractCompletedTasks(sourceContent, file.path),
+    )) {
+      sourceStatuses.set(this.buildSourceTaskFingerprint(task), "completed");
+    }
+
+    let updatedPlanningTaskCount = 0;
+    for (const [planningNotePath, mappings] of planningEntries) {
+      const planningAbstractFile =
+        this.app.vault.getAbstractFileByPath(planningNotePath);
+      if (
+        !(planningAbstractFile instanceof TFile) ||
+        planningAbstractFile.extension !== "md"
+      ) {
+        continue;
+      }
+
+      updatedPlanningTaskCount += await this.syncPlanningNoteFromSourceStates(
+        planningAbstractFile,
+        mappings.filter((mapping) => mapping.sourcePath === file.path),
+        sourceStatuses,
+      );
+    }
+
+    if (updatedPlanningTaskCount > 0) {
+      new Notice(
+        `Updated ${updatedPlanningTaskCount} generated planner task${updatedPlanningTaskCount === 1 ? "" : "s"} from source changes.`,
+      );
+    }
+  }
+
+  private async syncCompletedPlannerTasksToSource(
+    file: TFile,
+    crossNoteOnly = false,
+  ): Promise<void> {
     const content = await this.app.vault.read(file);
     const lines = content.split(/\r?\n/);
     const plannerSectionRange = this.findHeadingSectionRange(
@@ -426,10 +654,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       plannerTaskLines.set(index, plannerTaskLine);
     }
 
-    const mappingEntries = this.completionSyncMappings[file.path] ?? [];
+    const mappingEntries = (
+      this.completionSyncMappings[file.path] ?? []
+    ).filter((mapping) => !crossNoteOnly || mapping.sourcePath !== file.path);
     if (mappingEntries.length === 0) {
       this.appendDebugLog(
-        `Completion sync skipped for ${file.path}: no stored mappings for planning note`,
+        `Completion sync skipped for ${file.path}: no stored ${crossNoteOnly ? "cross-note " : ""}mappings for planning note`,
       );
       return;
     }
@@ -491,6 +721,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     let syncedCompletedSourceTaskCount = 0;
     let reopenedSourceTaskCount = 0;
+    const changedSourceFiles: TFile[] = [];
     for (const [
       sourcePath,
       sourceStatuses,
@@ -506,6 +737,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       );
       syncedCompletedSourceTaskCount += syncResult.completedCount;
       reopenedSourceTaskCount += syncResult.reopenedCount;
+      if (syncResult.completedCount > 0 || syncResult.reopenedCount > 0) {
+        changedSourceFiles.push(abstractFile);
+      }
+    }
+
+    for (const changedSourceFile of changedSourceFiles) {
+      await this.syncSourceTasksToPlanningNotes(changedSourceFile);
     }
 
     if (syncedCompletedSourceTaskCount > 0 || reopenedSourceTaskCount > 0) {
@@ -595,6 +833,136 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return { completedCount, reopenedCount };
   }
 
+  private async syncPlanningNoteFromSourceStates(
+    file: TFile,
+    mappings: CompletionSyncMapping[],
+    sourceStatuses: Map<string, PlannerTaskSyncStatus>,
+  ): Promise<number> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
+    if (!plannerSectionRange) {
+      return 0;
+    }
+
+    const mappingsByPlannerFingerprint = new Map<
+      string,
+      CompletionSyncMapping
+    >();
+    for (const mapping of mappings) {
+      mappingsByPlannerFingerprint.set(mapping.plannerFingerprint, mapping);
+    }
+
+    let updatedTaskCount = 0;
+    const completedDateMarker = `✅ ${this.formatDateKey(this.getTodayDate())}`;
+    for (
+      let index = plannerSectionRange.start;
+      index < plannerSectionRange.end;
+      index += 1
+    ) {
+      const plannerTaskLine = this.parsePlannerTaskLine(lines[index]);
+      if (!plannerTaskLine) {
+        continue;
+      }
+
+      const mapping = mappingsByPlannerFingerprint.get(
+        plannerTaskLine.fingerprint,
+      );
+      if (!mapping) {
+        continue;
+      }
+
+      const sourceStatus = sourceStatuses.get(mapping.sourceFingerprint);
+      if (!sourceStatus) {
+        continue;
+      }
+
+      const originalLine = lines[index];
+      const updatedLine =
+        sourceStatus === "completed"
+          ? this.markTaskLineCompleted(originalLine, completedDateMarker)
+          : this.reopenTaskLine(originalLine);
+      if (updatedLine === originalLine) {
+        continue;
+      }
+
+      lines[index] = updatedLine;
+      updatedTaskCount += 1;
+    }
+
+    if (updatedTaskCount === 0) {
+      return 0;
+    }
+
+    this.ignoredModifyPaths.add(file.path);
+    await this.app.vault.modify(file, lines.join("\n"));
+    this.appendDebugLog(
+      `Completion sync updated ${updatedTaskCount} planner task${updatedTaskCount === 1 ? "" : "s"} in ${file.path} from source changes`,
+    );
+    return updatedTaskCount;
+  }
+
+  private async syncPlanningNoteFromPlannerFingerprints(
+    file: TFile,
+    plannerStatuses: Map<string, PlannerTaskSyncStatus>,
+  ): Promise<number> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
+    if (!plannerSectionRange) {
+      return 0;
+    }
+
+    let updatedTaskCount = 0;
+    const completedDateMarker = `✅ ${this.formatDateKey(this.getTodayDate())}`;
+    for (
+      let index = plannerSectionRange.start;
+      index < plannerSectionRange.end;
+      index += 1
+    ) {
+      const plannerTaskLine = this.parsePlannerTaskLine(lines[index]);
+      if (!plannerTaskLine) {
+        continue;
+      }
+
+      const plannerStatus = plannerStatuses.get(plannerTaskLine.fingerprint);
+      if (!plannerStatus) {
+        continue;
+      }
+
+      const originalLine = lines[index];
+      const updatedLine =
+        plannerStatus === "completed"
+          ? this.markTaskLineCompleted(originalLine, completedDateMarker)
+          : this.reopenTaskLine(originalLine);
+      if (updatedLine === originalLine) {
+        continue;
+      }
+
+      lines[index] = updatedLine;
+      updatedTaskCount += 1;
+    }
+
+    if (updatedTaskCount === 0) {
+      return 0;
+    }
+
+    this.ignoredModifyPaths.add(file.path);
+    await this.app.vault.modify(file, lines.join("\n"));
+    this.appendDebugLog(
+      `Completion sync updated ${updatedTaskCount} same-note planner task${updatedTaskCount === 1 ? "" : "s"} in ${file.path}`,
+    );
+    return updatedTaskCount;
+  }
+
   async refreshBusyCalendarsForActiveNote(): Promise<void> {
     const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
     const planningDate = activeView?.file
@@ -650,7 +1018,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   clearDebugLog(): void {
     this.debugLogEntries = [];
-    this.queueDebugLogWrite();
   }
 
   private formatErrorForDebug(error: unknown): string {
@@ -1051,8 +1418,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     if (this.debugLogEntries.length > 100) {
       this.debugLogEntries.splice(0, this.debugLogEntries.length - 100);
     }
-
-    this.queueDebugLogWrite();
   }
 
   private getDebugLogText(): string {
@@ -1061,18 +1426,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return this.debugLogEntries.join("\n\n");
-  }
-
-  private queueDebugLogWrite(): void {
-    this.debugLogWritePromise = this.debugLogWritePromise
-      .catch(() => undefined)
-      .then(async () => {
-        const logText = this.getDebugLogText();
-        await this.app.vault.adapter.write(DEBUG_LOG_FILE_PATH, logText);
-      })
-      .catch((error) => {
-        console.error("Failed to persist debug log", error);
-      });
   }
 
   private async loadNodeIcal(): Promise<{
