@@ -1,6 +1,6 @@
-# Obsidian Automatic Time Blocking
+# Automatic Time Blocking
 
-Obsidian Automatic Time Blocking is a prototype Obsidian plugin for turning selected tasks into time blocks in your daily note so they can work smoothly with Day Planner-style workflows.
+Automatic Time Blocking is a prototype Obsidian plugin for turning selected tasks into time blocks in your daily note so they can work smoothly with Day Planner-style workflows.
 
 ## Status
 
@@ -15,6 +15,7 @@ The plugin files now live at the repository root rather than inside a nested `ob
 What is implemented today:
 
 - a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, break duration between generated blocks, and separate before/after meeting buffers for remote calendar busy events
+- a global `Completion sync` setting that can enable or disable completion syncing between generated planner tasks and their source tasks
 - a grouped task discovery settings section with a mode selector for `Built-in` versus `Dataview`
 - a command named `Generate time blocks for active note`
 - parsing of open or in-progress Markdown task lines from the active note
@@ -37,6 +38,9 @@ What is implemented today:
 - grouped Remote Calendar settings with an `Add remote calendar` button for managing more than one internet calendar feed
 - a manual `Refresh busy calendars` command for reloading configured remote calendars
 - a `Preview busy calendars for active note` command and settings action for inspecting which busy events are visible for the current planning date
+- bidirectional completion syncing between generated planner tasks and source tasks across separate notes
+- directional completion syncing for tasks that live in the same note under different headings, so edits can flow from the side you changed without immediately undoing themselves
+- in-memory completion sync metadata and debug logging, so sync support no longer recreates a debug Markdown file in the vault
 
 What is not implemented yet:
 
@@ -74,6 +78,7 @@ The first meaningful version is expected to focus on a small, opinionated core:
 - insert generated time blocks into the daily note under a configurable heading
 - maintain compatibility with Day Planner output expectations
 - preserve task emoji metadata where possible
+- keep generated planner task completion states synchronized with their source tasks when completion sync is enabled
 
 ## Task Sources
 
@@ -100,6 +105,7 @@ Current prototype behavior for this area:
 - current external-date matching recognizes `📅 YYYY-MM-DD`, `⏳ YYYY-MM-DD`, `🛫 YYYY-MM-DD`, and `>YYYY-MM-DD`
 - generated planner lines for external tasks append a compact `[[note|↗]]` backlink to the source note
 - generated planner lines keep `📅`, `⏳`, and `🛫` visible as plain text while wrapping the detected date text in inline code for Day Planner compatibility
+- completion syncing uses stored source-to-planner mappings and task fingerprints so marking either side done or reopened can update the other side reliably
 
 Exact parsing and prioritization rules are still being designed.
 
@@ -113,6 +119,26 @@ The documentation and future implementation are aimed at:
 - treating the generated heading as plugin output rather than as an authoritative task source during reruns
 - preserving useful task text and emojis where possible
 - keeping the result compatible with Day Planner-style rendering and manual editing
+
+## Completion Sync
+
+When `Completion sync` is enabled in settings, the plugin keeps generated planner task completion states synchronized with the source tasks they were generated from.
+
+Current behavior:
+
+- marking a generated planner task complete updates the source task
+- reopening a generated planner task reopens the source task
+- marking a source task complete updates linked generated planner tasks
+- reopening a source task reopens linked generated planner tasks
+- cross-note sync continues to work when one source task is represented in more than one planning note
+- same-note sync is supported when the source task and generated planner task live in the same note under different headings
+- same-note sync uses directional change detection to reduce feedback loops when editing either side
+- turning `Completion sync` off disables all completion syncing
+
+Current limitations:
+
+- sync depends on generated planner tasks retaining enough of their rendered task text to match the stored source mapping
+- completion syncing only applies to generated planner tasks that were created by the plugin and recorded in its sync mappings
 
 ## Development
 
@@ -145,7 +171,7 @@ This repository includes a GitHub Actions release workflow that builds the plugi
 Current release assets:
 
 - `dist/main.js`
-- `dist/manifest.json`
+- `manifest.json`
 
 To publish a BRAT-compatible release:
 
@@ -163,6 +189,7 @@ The repository now contains a small but real prototype rather than only scaffold
 Implemented today:
 
 - a persisted settings tab
+- a global `Completion sync` setting for turning task completion syncing on or off
 - a grouped task discovery settings section with a `Built-in` versus `Dataview` mode selector
 - active-note task parsing for open or in-progress Markdown tasks
 - optional scoped external-note task discovery from configured note and folder paths
@@ -185,6 +212,9 @@ Implemented today:
 - the `Refresh busy calendars` command forces a fresh reload of the configured remote calendars
 - the `Preview busy calendars for active note` command shows which busy events the plugin can currently see for the active note date
 - ignored calendar event patterns are simple case-insensitive substring matches against the event title
+- completion syncing can propagate done and reopened states in both directions between source tasks and generated planner tasks
+- same-note completion syncing uses directional sync logic when source and planner tasks live in different headings of the same note
+- completion sync support now keeps debug logs in memory instead of writing a debug Markdown file into the vault
 
 ## Task Syntax Supported Today
 
@@ -227,7 +257,6 @@ Near-term priorities are:
 - expand task-source support beyond the active note
 - decide the exact task selection rules across Obsidian Tasks, Kanban, and daily-note inputs
 - improve generated output for stronger Day Planner compatibility
-- support marking a generated Day Planner task complete and reflecting that completion back to the source task that created it
 - preserve task emoji and related metadata more faithfully
 
 Ideas intentionally deferred for now include broader scheduling heuristics, more advanced prioritization schemes, and other larger automation behaviors.

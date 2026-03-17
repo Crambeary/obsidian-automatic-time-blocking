@@ -65,7 +65,7 @@ On Windows, a directory junction is often the most practical way to keep the rep
 4. In Obsidian, go to **Settings -> Community plugins**.
 5. Turn off **Safe mode** if needed.
 6. Click **Reload plugins** or restart Obsidian.
-7. Enable **Obsidian Automatic Time Blocking**.
+7. Enable **Automatic Time Blocking**.
 
 ## Hot reload development workflow
 
@@ -150,6 +150,8 @@ The current prototype supports:
 - writing generated blocks under a configurable heading in the active note, including configurable heading level and heading text
 - snapping generated block start times to a configurable interval and skipping tasks that would exceed the configured work day
 - Dataview mode uses Dataview's whole-vault index for external task discovery, while built-in mode remains the scoped note-and-folder fallback
+- a global `Completion sync` setting that can turn completion syncing on or off
+- bidirectional completion syncing between generated planner tasks and their source tasks, including cross-note sync and same-note directional sync
 
 It does not yet implement:
 

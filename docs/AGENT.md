@@ -5,7 +5,7 @@ This file gives AI coding agents repo-specific guidance for working safely and e
 ## Project Overview
 
 - Project name: `obsidian-atb`
-- Plugin name: Obsidian Automatic Time Blocking
+- Plugin name: Automatic Time Blocking
 - Project stage: prototype
 - Current implementation state: a small but real prototype with persisted settings and active-note time-block generation
 - Primary product direction: turn selected tasks into time blocks written into the daily note for Day Planner-compatible workflows
@@ -26,6 +26,7 @@ The intended plugin behavior is:
 - support duration markers on tasks
 - write generated time blocks into a configurable heading in the daily note
 - for the current prototype, follow a NotePlan-like rerun model where generated time blocks are treated as output, not as an authoritative task source on the next run
+- support optional completion syncing between generated planner tasks and their source tasks, including same-note and cross-note cases
 - preserve source task emojis where possible
 - keep output compatible with Day Planner-style note formatting
 - expose core behavior through a settings page early
@@ -55,7 +56,7 @@ The current code is no longer scaffold-only. It includes a working prototype cen
 
 Implemented today:
 
-- persisted settings for planner heading text and level, day start time, work day end time, default duration, and start interval
+- persisted settings for planner heading text and level, day start time, work day end time, default duration, start interval, and a global completion sync toggle
 - a `Generate time blocks from active note` command and matching ribbon action
 - parsing of open and in-progress Markdown task lines from the active note
 - exclusion of tasks already inside the configured planner heading so reruns replace generated output instead of re-parsing it as source input
@@ -63,6 +64,8 @@ Implemented today:
 - duration marker parsing for `[30m]` and `@30m`, with marker text preserved in generated task lines
 - priority ordering for active-note tasks using Obsidian Tasks priority markers from highest to lowest, with unmarked tasks between medium and low priority
 - generation of sequential time blocks under a configurable heading in the current note, snapped to the configured interval and limited by the configured work day
+- bidirectional completion syncing between generated planner tasks and source tasks, including same-note directional sync and cross-note fan-out updates
+- in-memory completion sync metadata and debug logging, without writing a debug Markdown file into the vault
 
 Before implementing new behavior:
 
@@ -97,7 +100,7 @@ If you are asked to work on product features, prioritize these areas first:
 4. writing time blocks into the daily note under a configurable heading
 5. preserving task emojis where practical
 6. maintaining Day Planner-compatible output
-7. syncing completion state from generated planner tasks back to the source task when the user marks the generated item done
+7. maintaining reliable bidirectional completion sync between generated planner tasks and source tasks
 
 ## Task Source Expectations
 

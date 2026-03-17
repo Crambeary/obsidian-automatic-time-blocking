@@ -105,6 +105,7 @@ interface ObsidianAutomaticTimeBlockingSettings {
   externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
   externalTaskNotePaths: string[];
   externalTaskFolderPaths: string[];
+  enableCompletionSync: boolean;
 }
 
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
@@ -124,6 +125,7 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   externalTaskDiscoveryMode: "built-in",
   externalTaskNotePaths: [],
   externalTaskFolderPaths: [],
+  enableCompletionSync: true,
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
@@ -388,6 +390,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private async handleVaultFileModify(file: TFile): Promise<void> {
     if (file.extension !== "md") {
+      return;
+    }
+
+    if (!this.settings.enableCompletionSync) {
       return;
     }
 
@@ -3270,6 +3276,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       ...mappingsByFingerprint.values(),
     ];
     await this.savePluginData();
+    await this.refreshSameNoteSyncSnapshot(planningNotePath);
   }
 
   private normalizeCompletionSyncMappings(
@@ -3731,6 +3738,23 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.splitTasksAcrossGaps)
           .onChange(async (value) => {
             this.plugin.settings.splitTasksAcrossGaps = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Completion sync")
+      .setDesc(
+        "Keep generated planner task completion states synchronized with their source tasks. Turn this off to disable completion syncing entirely.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableCompletionSync)
+          .onChange(async (value) => {
+            this.plugin.settings.enableCompletionSync = value;
+            if (!value) {
+              this.plugin.sameNoteSyncSnapshots.clear();
+            }
             await this.plugin.saveSettings();
           }),
       );
