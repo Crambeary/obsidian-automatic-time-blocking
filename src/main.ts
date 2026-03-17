@@ -128,6 +128,7 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
   calendarIcsUrls?: string;
+  completionSyncMappings?: Record<string, CompletionSyncMapping[]>;
   outputHeading?: string;
 }
 
@@ -136,12 +137,30 @@ interface ParsedTask {
   durationMinutes: number;
   priority: TaskPriority;
   manualStartMinutes: number | null;
-  statusMarker: " " | "/";
+  statusMarker: " " | "/" | ">" | "x";
   indent: number;
   sourcePath: string;
   sourceLineNumber: number;
   isExternalSource: boolean;
   subtasks: ParsedTask[];
+}
+
+interface PlannerTaskReference {
+  sourcePath: string;
+  sourceFingerprint: string;
+}
+
+type PlannerTaskSyncStatus = "completed" | "active";
+
+interface PlannerTaskLine {
+  statusMarker: string;
+  fingerprint: string;
+}
+
+interface CompletionSyncMapping {
+  plannerFingerprint: string;
+  sourcePath: string;
+  sourceFingerprint: string;
 }
 
 interface TaskCollectionResult {
@@ -185,10 +204,12 @@ type ExternalSourceSelection = TFile | TFolder;
 
 export default class ObsidianAutomaticTimeBlocking extends Plugin {
   settings: ObsidianAutomaticTimeBlockingSettings;
+  completionSyncMappings: Record<string, CompletionSyncMapping[]> = {};
   calendarPreviewCache = new Map<string, CalendarPreviewData>();
   debugLogEntries: string[] = [];
   startupStatus = "Not started";
   debugLogWritePromise: Promise<void> = Promise.resolve();
+  ignoredModifyPaths = new Set<string>();
   momentRuntime: {
     moment: (value?: Date) => {
       utcOffset: () => number;
@@ -294,6 +315,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       this.appendDebugLog("Startup: registering settings tab");
       this.addSettingTab(new AutomaticTimeBlockingSettingTab(this.app, this));
 
+      this.startupStatus = "Registering completion sync";
+      this.appendDebugLog("Startup: registering completion sync listener");
+      this.registerEvent(
+        this.app.vault.on("modify", (file) => {
+          if (file instanceof TFile) {
+            void this.handleVaultFileModify(file);
+          }
+        }),
+      );
+
       this.startupStatus = "Ready";
       this.appendDebugLog("Startup: plugin ready");
     } catch (error) {
@@ -331,11 +362,237 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     if (!this.settings.plannerHeading && loadedData?.outputHeading) {
       this.settings.plannerHeading = loadedData.outputHeading;
     }
+
+    this.completionSyncMappings = this.normalizeCompletionSyncMappings(
+      loadedData?.completionSyncMappings,
+    );
   }
 
   async saveSettings() {
     this.calendarPreviewCache.clear();
-    await this.saveData(this.settings);
+    await this.savePluginData();
+  }
+
+  private async savePluginData(): Promise<void> {
+    await this.saveData({
+      ...this.settings,
+      completionSyncMappings: this.completionSyncMappings,
+    });
+  }
+
+  private async handleVaultFileModify(file: TFile): Promise<void> {
+    if (file.extension !== "md") {
+      return;
+    }
+
+    if (this.ignoredModifyPaths.has(file.path)) {
+      this.ignoredModifyPaths.delete(file.path);
+      return;
+    }
+
+    try {
+      await this.syncCompletedPlannerTasksToSource(file);
+    } catch (error) {
+      this.appendDebugLog(
+        `Completion sync failed for ${file.path}: ${this.formatErrorForDebug(error)}`,
+      );
+    }
+  }
+
+  private async syncCompletedPlannerTasksToSource(file: TFile): Promise<void> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
+
+    if (!plannerSectionRange) {
+      return;
+    }
+
+    const plannerTaskLines = new Map<number, PlannerTaskLine>();
+    for (
+      let index = plannerSectionRange.start;
+      index < plannerSectionRange.end;
+      index += 1
+    ) {
+      const plannerTaskLine = this.parsePlannerTaskLine(lines[index]);
+      if (!plannerTaskLine) {
+        continue;
+      }
+
+      plannerTaskLines.set(index, plannerTaskLine);
+    }
+
+    const mappingEntries = this.completionSyncMappings[file.path] ?? [];
+    if (mappingEntries.length === 0) {
+      this.appendDebugLog(
+        `Completion sync skipped for ${file.path}: no stored mappings for planning note`,
+      );
+      return;
+    }
+
+    const mappingsByPlannerFingerprint = new Map<
+      string,
+      CompletionSyncMapping
+    >();
+    for (const mappingEntry of mappingEntries) {
+      mappingsByPlannerFingerprint.set(
+        mappingEntry.plannerFingerprint,
+        mappingEntry,
+      );
+    }
+
+    const syncedReferences = [...plannerTaskLines.values()]
+      .filter((plannerTaskLine) =>
+        mappingsByPlannerFingerprint.has(plannerTaskLine.fingerprint),
+      )
+      .map((plannerTaskLine) => ({
+        mappingEntry: mappingsByPlannerFingerprint.get(
+          plannerTaskLine.fingerprint,
+        ) as CompletionSyncMapping,
+        status:
+          plannerTaskLine.statusMarker.toLowerCase() === "x"
+            ? ("completed" as PlannerTaskSyncStatus)
+            : ("active" as PlannerTaskSyncStatus),
+      }))
+      .map(({ mappingEntry, status }) => ({
+        sourcePath: mappingEntry.sourcePath,
+        sourceFingerprint: mappingEntry.sourceFingerprint,
+        status,
+      }));
+
+    this.appendDebugLog(
+      `Completion sync scan for ${file.path}: planner tasks=${plannerTaskLines.size}, mappings=${mappingEntries.length}, synced matches=${syncedReferences.length}`,
+    );
+
+    if (syncedReferences.length === 0) {
+      return;
+    }
+
+    const referencesBySourcePath = new Map<
+      string,
+      Map<string, PlannerTaskSyncStatus>
+    >();
+    for (const reference of syncedReferences) {
+      if (!referencesBySourcePath.has(reference.sourcePath)) {
+        referencesBySourcePath.set(
+          reference.sourcePath,
+          new Map<string, PlannerTaskSyncStatus>(),
+        );
+      }
+
+      referencesBySourcePath
+        .get(reference.sourcePath)
+        ?.set(reference.sourceFingerprint, reference.status);
+    }
+
+    let syncedCompletedSourceTaskCount = 0;
+    let reopenedSourceTaskCount = 0;
+    for (const [
+      sourcePath,
+      sourceStatuses,
+    ] of referencesBySourcePath.entries()) {
+      const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
+      if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md") {
+        continue;
+      }
+
+      const syncResult = await this.syncSourceTasksFromPlannerStates(
+        abstractFile,
+        sourceStatuses,
+      );
+      syncedCompletedSourceTaskCount += syncResult.completedCount;
+      reopenedSourceTaskCount += syncResult.reopenedCount;
+    }
+
+    if (syncedCompletedSourceTaskCount > 0 || reopenedSourceTaskCount > 0) {
+      new Notice(
+        `Synced ${syncedCompletedSourceTaskCount} completed source task${syncedCompletedSourceTaskCount === 1 ? "" : "s"} and reopened ${reopenedSourceTaskCount} source task${reopenedSourceTaskCount === 1 ? "" : "s"} from planner changes.`,
+      );
+    }
+  }
+
+  private async syncSourceTasksFromPlannerStates(
+    file: TFile,
+    sourceStatuses: Map<string, PlannerTaskSyncStatus>,
+  ): Promise<{ completedCount: number; reopenedCount: number }> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    let completedCount = 0;
+    let reopenedCount = 0;
+    const completedDateMarker = `✅ ${this.formatDateKey(this.getTodayDate())}`;
+    const matchedTasks = new Map<number, PlannerTaskSyncStatus>();
+
+    const openTasks = this.flattenTasks(
+      this.extractOpenTasks(content, file.path),
+    );
+    for (const parsedTask of openTasks) {
+      const taskFingerprint = this.buildSourceTaskFingerprint(parsedTask);
+      const plannerStatus = sourceStatuses.get(taskFingerprint);
+      if (!plannerStatus) {
+        continue;
+      }
+
+      matchedTasks.set(parsedTask.sourceLineNumber, plannerStatus);
+    }
+
+    const completedTasks = this.flattenTasks(
+      this.extractCompletedTasks(content, file.path),
+    );
+    for (const parsedTask of completedTasks) {
+      const taskFingerprint = this.buildSourceTaskFingerprint(parsedTask);
+      const plannerStatus = sourceStatuses.get(taskFingerprint);
+      if (!plannerStatus) {
+        continue;
+      }
+
+      matchedTasks.set(parsedTask.sourceLineNumber, plannerStatus);
+    }
+
+    this.appendDebugLog(
+      `Completion sync source match for ${file.path}: requested fingerprints=${sourceStatuses.size}, matched tasks=${matchedTasks.size}`,
+    );
+
+    for (const [sourceLineNumber, plannerStatus] of matchedTasks.entries()) {
+      const lineIndex = sourceLineNumber - 1;
+      if (lineIndex < 0 || lineIndex >= lines.length) {
+        continue;
+      }
+
+      const originalLine = lines[lineIndex];
+      if (!/^\s*[-*]\s+\[(?: |\/|>|x)\]\s+/.test(originalLine)) {
+        continue;
+      }
+
+      const updatedLine =
+        plannerStatus === "completed"
+          ? this.markTaskLineCompleted(originalLine, completedDateMarker)
+          : this.reopenTaskLine(originalLine);
+      if (updatedLine === originalLine) {
+        continue;
+      }
+
+      lines[lineIndex] = updatedLine;
+      if (plannerStatus === "completed") {
+        completedCount += 1;
+      } else {
+        reopenedCount += 1;
+      }
+    }
+
+    if (completedCount === 0 && reopenedCount === 0) {
+      return { completedCount: 0, reopenedCount: 0 };
+    }
+
+    this.ignoredModifyPaths.add(file.path);
+    await this.app.vault.modify(file, lines.join("\n"));
+    this.appendDebugLog(
+      `Completion sync updated ${completedCount} completed task${completedCount === 1 ? "" : "s"} and ${reopenedCount} reopened task${reopenedCount === 1 ? "" : "s"} in ${file.path}`,
+    );
+    return { completedCount, reopenedCount };
   }
 
   async refreshBusyCalendarsForActiveNote(): Promise<void> {
@@ -452,6 +709,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
 
     await this.app.vault.modify(view.file, updatedContent);
+    await this.updateCompletionSyncMappingsForPlanningNote(
+      view.file.path,
+      tasks,
+    );
 
     const generatedCount = generatedTimeBlocks.scheduledTaskCount;
     const skippedCount = generatedTimeBlocks.skippedTaskCount;
@@ -552,6 +813,33 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     sourcePath: string,
     isExternalSource = false,
   ): ParsedTask[] {
+    return this.extractTasksByStatus(
+      content,
+      sourcePath,
+      [" ", "/", ">"],
+      isExternalSource,
+    );
+  }
+
+  private extractCompletedTasks(
+    content: string,
+    sourcePath: string,
+    isExternalSource = false,
+  ): ParsedTask[] {
+    return this.extractTasksByStatus(
+      content,
+      sourcePath,
+      ["x", "X"],
+      isExternalSource,
+    );
+  }
+
+  private extractTasksByStatus(
+    content: string,
+    sourcePath: string,
+    allowedStatuses: string[],
+    isExternalSource = false,
+  ): ParsedTask[] {
     const lines = content.split(/\r?\n/);
     const tasks: ParsedTask[] = [];
     const taskStack: ParsedTask[] = [];
@@ -570,12 +858,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      const taskMatch = line.match(/^\s*[-*]\s+\[([ /])\]\s+(.*)$/);
+      const taskMatch = line.match(/^\s*[-*]\s+\[([^\]])\]\s+(.*)$/);
       if (!taskMatch) {
         continue;
       }
 
-      const indentMatch = line.match(/^(\s*)[-*]\s+\[([ /])\]\s+/);
+      if (!allowedStatuses.includes(taskMatch[1])) {
+        continue;
+      }
+
+      const indentMatch = line.match(/^(\s*)[-*]\s+\[([^\]])\]\s+/);
       const rawText = taskMatch[2].trim();
       const parsedTimeRange = this.parseExplicitTaskTimeRange(rawText);
       const durationMinutes =
@@ -587,7 +879,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         manualStartMinutes:
           parsedTimeRange?.startMinutes ??
           this.parseManualStartMinutes(rawText),
-        statusMarker: taskMatch[1] as " " | "/",
+        statusMarker: taskMatch[1] as " " | "/" | ">" | "x",
         indent: indentMatch?.[1].length ?? 0,
         sourcePath,
         sourceLineNumber: index + 1,
@@ -2587,6 +2879,136 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private formatDateKey(value: Date): string {
     return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+
+  private parsePlannerTaskLine(line: string): PlannerTaskLine | null {
+    const taskMatch = line.match(/^\s*[-*]\s+\[([^\]])\]\s+(.*)$/);
+    if (!taskMatch) {
+      return null;
+    }
+
+    return {
+      statusMarker: taskMatch[1],
+      fingerprint: this.buildPlannerFingerprintFromRenderedText(taskMatch[2]),
+    };
+  }
+
+  private async updateCompletionSyncMappingsForPlanningNote(
+    planningNotePath: string,
+    tasks: ParsedTask[],
+  ): Promise<void> {
+    const flattenedTasks = this.flattenTasks(tasks);
+    const mappingsByFingerprint = new Map<string, CompletionSyncMapping>();
+
+    for (const task of flattenedTasks) {
+      const plannerFingerprint = this.buildPlannerTaskFingerprint(task);
+      if (plannerFingerprint.length === 0 || task.sourcePath.length === 0) {
+        continue;
+      }
+
+      mappingsByFingerprint.set(plannerFingerprint, {
+        plannerFingerprint,
+        sourcePath: task.sourcePath,
+        sourceFingerprint: this.buildSourceTaskFingerprint(task),
+      });
+    }
+
+    this.completionSyncMappings[planningNotePath] = [
+      ...mappingsByFingerprint.values(),
+    ];
+    await this.savePluginData();
+  }
+
+  private normalizeCompletionSyncMappings(
+    value: unknown,
+  ): Record<string, CompletionSyncMapping[]> {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+
+    const normalizedEntries: Record<string, CompletionSyncMapping[]> = {};
+    for (const [planningNotePath, mappings] of Object.entries(value)) {
+      if (!Array.isArray(mappings)) {
+        continue;
+      }
+
+      const normalizedMappings = mappings.filter(
+        (mapping): mapping is CompletionSyncMapping =>
+          !!mapping &&
+          typeof mapping === "object" &&
+          typeof mapping.plannerFingerprint === "string" &&
+          typeof mapping.sourcePath === "string" &&
+          typeof mapping.sourceFingerprint === "string",
+      );
+      if (normalizedMappings.length === 0) {
+        continue;
+      }
+
+      normalizedEntries[planningNotePath] = normalizedMappings;
+    }
+
+    return normalizedEntries;
+  }
+
+  private flattenTasks(tasks: ParsedTask[]): ParsedTask[] {
+    const flattenedTasks: ParsedTask[] = [];
+
+    for (const task of tasks) {
+      flattenedTasks.push(task);
+      flattenedTasks.push(...this.flattenTasks(task.subtasks));
+    }
+
+    return flattenedTasks;
+  }
+
+  private buildPlannerTaskFingerprint(task: ParsedTask): string {
+    const plannerText = `${this.escapePlannerDateTokens(task.text)}${this.buildTaskSourceBacklink(task)}`;
+    return this.normalizeTaskFingerprint(plannerText);
+  }
+
+  private buildPlannerFingerprintFromRenderedText(taskText: string): string {
+    const textWithoutTimePrefix = taskText.replace(
+      /^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/,
+      "",
+    );
+    return this.normalizeTaskFingerprint(textWithoutTimePrefix);
+  }
+
+  private buildSourceTaskFingerprint(task: ParsedTask): string {
+    return this.normalizeTaskFingerprint(task.text);
+  }
+
+  private markTaskLineCompleted(
+    originalLine: string,
+    completedDateMarker: string,
+  ): string {
+    const updatedLine = originalLine.replace(
+      /^(\s*[-*]\s+)\[(?: |\/|>)\](\s+.*)$/,
+      "$1[x]$2",
+    );
+    return /(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?(?=\s|$)/.test(updatedLine)
+      ? updatedLine
+      : `${updatedLine} ${completedDateMarker}`;
+  }
+
+  private reopenTaskLine(originalLine: string): string {
+    return originalLine
+      .replace(/^(\s*[-*]\s+)\[x\](\s+.*)$/i, "$1[ ]$2")
+      .replace(/(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?(?=\s|$)/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/^(\s*[-*]\s+\[ \])\s*/, "$1 ")
+      .trimEnd();
+  }
+
+  private normalizeTaskFingerprint(value: string): string {
+    return value
+      .replace(/<!--[^>]*-->/g, "")
+      .replace(/\[\[[^\]|]+\|↗\]\]/g, "")
+      .replace(/(^|\s)✅\s*`?(\d{4}-\d{2}-\d{2})`?(?=\s|$)/g, " ")
+      .replace(/`/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
   }
 
   private findHeadingSectionRange(
