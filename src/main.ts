@@ -78,6 +78,7 @@ interface CalendarEventDiagnostic {
 
 type AutomaticStartMode = "snapped" | "now";
 type ExternalTaskDiscoveryMode = "built-in" | "dataview";
+type SelectableTaskStatus = "open" | "inProgress" | "rescheduled";
 
 const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
   highest: 6,
@@ -105,6 +106,9 @@ interface ObsidianAutomaticTimeBlockingSettings {
   externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
   externalTaskNotePaths: string[];
   externalTaskFolderPaths: string[];
+  includeOpenTasks: boolean;
+  includeInProgressTasks: boolean;
+  includeRescheduledTasks: boolean;
   enableCompletionSync: boolean;
 }
 
@@ -125,6 +129,9 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   externalTaskDiscoveryMode: "built-in",
   externalTaskNotePaths: [],
   externalTaskFolderPaths: [],
+  includeOpenTasks: true,
+  includeInProgressTasks: true,
+  includeRescheduledTasks: true,
   enableCompletionSync: true,
 };
 
@@ -1129,9 +1136,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     activeContent: string,
     planningDate: Date,
   ): Promise<TaskCollectionResult> {
-    const activeNoteTasks = this.extractOpenTasks(
+    const selectedTaskStatuses = this.getPlanningTaskStatusMarkers();
+    const activeNoteTasks = this.extractTasksByStatus(
       activeContent,
       activeFile.path,
+      selectedTaskStatuses,
     );
     const externalTaskDiscovery = this.getExternalTaskDiscovery(
       activeFile,
@@ -1142,9 +1151,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     for (const externalSourceFile of externalSourceFiles) {
       const sourceContent = await this.app.vault.cachedRead(externalSourceFile);
-      const sourceTasks = this.extractOpenTasks(
+      const sourceTasks = this.extractTasksByStatus(
         sourceContent,
         externalSourceFile.path,
+        selectedTaskStatuses,
         true,
       ).filter((task) =>
         this.externalTaskMatchesPlanningDate(task.text, planningDate),
@@ -1204,6 +1214,28 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       [" ", "/", ">"],
       isExternalSource,
     );
+  }
+
+  private getPlanningTaskStatusMarkers(): string[] {
+    const taskStatuses: string[] = [];
+
+    if (this.settings.includeOpenTasks) {
+      taskStatuses.push(" ");
+    }
+
+    if (this.settings.includeInProgressTasks) {
+      taskStatuses.push("/");
+    }
+
+    if (this.settings.includeRescheduledTasks) {
+      taskStatuses.push(">");
+    }
+
+    if (taskStatuses.length === 0) {
+      taskStatuses.push(" ");
+    }
+
+    return taskStatuses;
   }
 
   private extractCompletedTasks(
@@ -1363,9 +1395,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     for (const resolvedFile of resolvedMarkdownFiles.values()) {
       const sourceContent = await this.app.vault.cachedRead(resolvedFile);
-      const sourceTasks = this.extractOpenTasks(
+      const sourceTasks = this.extractTasksByStatus(
         sourceContent,
         resolvedFile.path,
+        this.getPlanningTaskStatusMarkers(),
         true,
       ).filter((task) =>
         this.externalTaskMatchesPlanningDate(task.text, planningDate),
@@ -3157,6 +3190,38 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
   }
 
+  private parseRecurrenceRule(
+    recurrenceRule: string,
+  ): { frequency: string; interval?: number; until?: Date } | null {
+    const segments = recurrenceRule.split(";");
+    const parsedRule = new Map<string, string>();
+
+    for (const segment of segments) {
+      const [key, value] = segment.split("=");
+      if (!key || !value) {
+        continue;
+      }
+
+      parsedRule.set(key.toUpperCase(), value);
+    }
+
+    const frequency = parsedRule.get("FREQ");
+    if (!frequency) {
+      return null;
+    }
+
+    return {
+      frequency,
+      interval: parsedRule.get("INTERVAL")
+        ? Number(parsedRule.get("INTERVAL"))
+        : undefined,
+      until: parsedRule.get("UNTIL")
+        ? (this.parseIcsDateValue(parsedRule.get("UNTIL") ?? "", new Map()) ??
+          undefined)
+        : undefined,
+    };
+  }
+
   private expandEventOccurrencesForDay(
     event: ParsedIcsEvent,
     dayStart: Date,
@@ -3230,38 +3295,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return [{ start: occurrenceStart, end: occurrenceEnd }];
-  }
-
-  private parseRecurrenceRule(
-    recurrenceRule: string,
-  ): { frequency: string; interval?: number; until?: Date } | null {
-    const segments = recurrenceRule.split(";");
-    const parsedRule = new Map<string, string>();
-
-    for (const segment of segments) {
-      const [key, value] = segment.split("=");
-      if (!key || !value) {
-        continue;
-      }
-
-      parsedRule.set(key.toUpperCase(), value);
-    }
-
-    const frequency = parsedRule.get("FREQ");
-    if (!frequency) {
-      return null;
-    }
-
-    return {
-      frequency,
-      interval: parsedRule.get("INTERVAL")
-        ? Number(parsedRule.get("INTERVAL"))
-        : undefined,
-      until: parsedRule.get("UNTIL")
-        ? (this.parseIcsDateValue(parsedRule.get("UNTIL") ?? "", new Map()) ??
-          undefined)
-        : undefined,
-    };
   }
 
   private formatDateKey(value: Date): string {
@@ -3769,6 +3802,117 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName("Planning task states")
+      .setDesc(
+        "Choose which source task states can be turned into generated time blocks. Open uses `[ ]`, in progress uses `[/]`, and rescheduled uses `[>]`.",
+      );
+
+    const ensureAtLeastOnePlanningTaskState = (
+      settingKey: SelectableTaskStatus,
+      nextValue: boolean,
+    ): boolean => {
+      const includeOpenTasks =
+        settingKey === "open"
+          ? nextValue
+          : this.plugin.settings.includeOpenTasks;
+      const includeInProgressTasks =
+        settingKey === "inProgress"
+          ? nextValue
+          : this.plugin.settings.includeInProgressTasks;
+      const includeRescheduledTasks =
+        settingKey === "rescheduled"
+          ? nextValue
+          : this.plugin.settings.includeRescheduledTasks;
+
+      if (
+        includeOpenTasks ||
+        includeInProgressTasks ||
+        includeRescheduledTasks
+      ) {
+        return true;
+      }
+
+      new Notice("Keep at least one planning task state enabled.");
+      return false;
+    };
+
+    const planningTaskStatesGroupEl = containerEl.createDiv();
+    planningTaskStatesGroupEl.addClass("setting-item");
+
+    const planningTaskStatesInfoEl = planningTaskStatesGroupEl.createDiv();
+    planningTaskStatesInfoEl.addClass("setting-item-info");
+    planningTaskStatesInfoEl
+      .createDiv({ text: "Planning task states" })
+      .addClass("setting-item-name");
+    planningTaskStatesInfoEl
+      .createDiv({
+        text: "Choose which source task states can be turned into generated time blocks.",
+      })
+      .addClass("setting-item-description");
+
+    const planningTaskStatesControlEl = planningTaskStatesGroupEl.createDiv();
+    planningTaskStatesControlEl.addClass("setting-item-control");
+
+    const planningTaskButtonsEl = planningTaskStatesControlEl.createDiv();
+    planningTaskButtonsEl.style.display = "flex";
+    planningTaskButtonsEl.style.flexWrap = "wrap";
+    planningTaskButtonsEl.style.gap = "8px";
+
+    const createPlanningTaskStateButton = (
+      label: string,
+      marker: string,
+      settingKey: SelectableTaskStatus,
+      currentValue: boolean,
+    ) => {
+      const buttonEl = planningTaskButtonsEl.createEl("button", {
+        text: `${label} ${marker} ${currentValue ? "On" : "Off"}`,
+      });
+      buttonEl.style.minWidth = "120px";
+
+      if (currentValue) {
+        buttonEl.addClass("mod-cta");
+      }
+
+      buttonEl.addEventListener("click", async () => {
+        const nextValue = !currentValue;
+        if (!ensureAtLeastOnePlanningTaskState(settingKey, nextValue)) {
+          this.display();
+          return;
+        }
+
+        if (settingKey === "open") {
+          this.plugin.settings.includeOpenTasks = nextValue;
+        } else if (settingKey === "inProgress") {
+          this.plugin.settings.includeInProgressTasks = nextValue;
+        } else {
+          this.plugin.settings.includeRescheduledTasks = nextValue;
+        }
+
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    };
+
+    createPlanningTaskStateButton(
+      "Open",
+      "[ ]",
+      "open",
+      this.plugin.settings.includeOpenTasks,
+    );
+    createPlanningTaskStateButton(
+      "In progress",
+      "[/]",
+      "inProgress",
+      this.plugin.settings.includeInProgressTasks,
+    );
+    createPlanningTaskStateButton(
+      "Rescheduled",
+      "[>]",
+      "rescheduled",
+      this.plugin.settings.includeRescheduledTasks,
+    );
 
     new Setting(containerEl)
       .setName("Completion sync")

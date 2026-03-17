@@ -17,8 +17,9 @@ What is implemented today:
 - a settings tab for output heading, day start time, automatic start mode, work day end time, start interval, default duration, optional split scheduling across gaps, break duration between generated blocks, and separate before/after meeting buffers for remote calendar busy events
 - a global `Completion sync` setting that can enable or disable completion syncing between generated planner tasks and their source tasks
 - a grouped task discovery settings section with a mode selector for `Built-in` versus `Dataview`
+- settings to choose whether planning intake includes open (`[ ]`), in-progress (`[/]`), and rescheduled (`[>]`) task states
 - a command named `Generate time blocks for active note`
-- parsing of open or in-progress Markdown task lines from the active note
+- parsing of selected open, in-progress, or rescheduled Markdown task lines from the active note based on settings
 - optional intake from configured external Markdown notes or folders, limited to explicit user-selected source paths rather than whole-vault scanning
 - Dataview-backed indexed discovery across the whole vault when the Dataview plugin is installed, with the existing scoped file and folder scan retained as the built-in fallback
 - when `Built-in` task discovery is selected, the configured external note and folder pickers are shown and used during planning
@@ -232,7 +233,8 @@ Current behavior:
 - `13:00` sets the start time for that task in 24-hour format
 - `13:00-14:30` sets both the start time and duration for that task from the explicit range
 - if a task has a manual start time but no duration marker, the plugin uses the configured default duration
-- generated planner lines preserve whether a source task was open (`[ ]`) or in progress (`[/]` or `[>]`)
+- planning intake can independently include or exclude source tasks marked as open (`[ ]`), in progress (`[/]`), or rescheduled (`[>]`)
+- generated planner lines preserve whether a source task was open (`[ ]`), in progress (`[/]`), or rescheduled (`[>]`)
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
 - tasks without a manual start time are still scheduled automatically using the existing priority ordering rules
 - automatic scheduling can either begin at the next snapped interval boundary or at the current time, based on settings
