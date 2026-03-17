@@ -13,7 +13,7 @@ import {
 } from "obsidian";
 import moment from "moment";
 import { tz } from "moment-timezone";
-import * as ical from "node-ical";
+import ical from "node-ical";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
@@ -1659,7 +1659,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     const calendarEntries = Object.values(
-      ical.sync.parseICS(rawCalendar) as Record<string, any>,
+      ical.parseICS(rawCalendar) as Record<string, any>,
     );
     const busyRanges: CalendarBusyRange[] = [];
     const eventDiagnostics: CalendarEventDiagnostic[] = [];
