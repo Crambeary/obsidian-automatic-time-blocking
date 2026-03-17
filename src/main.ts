@@ -11,8 +11,6 @@ import {
   TFile,
   TFolder,
 } from "obsidian";
-import moment from "moment";
-import { tz } from "moment-timezone";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
@@ -191,6 +189,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   debugLogEntries: string[] = [];
   startupStatus = "Not started";
   debugLogWritePromise: Promise<void> = Promise.resolve();
+  momentRuntime: {
+    moment: (value?: Date) => {
+      utcOffset: () => number;
+      clone: () => {
+        subtract: (amount: number, unit: string) => { toDate: () => Date };
+      };
+      isSame: (other: Date, unit: string) => boolean;
+      add: (amount: number, unit: string) => { toDate: () => Date };
+      toDate: () => Date;
+    };
+    tz: {
+      guess: () => string;
+      zone: (tzid: string) => {
+        utcOffset: (timestamp: number) => number;
+      } | null;
+    };
+  } | null = null;
 
   async onload() {
     try {
@@ -790,6 +805,68 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       const formattedError = this.formatErrorForDebug(error);
       this.appendDebugLog(`Calendar parser load failed: ${formattedError}`);
       throw new Error(`Unable to load calendar parser: ${formattedError}`);
+    }
+  }
+
+  private async loadMomentRuntime(): Promise<{
+    moment: (value?: Date) => {
+      utcOffset: () => number;
+      clone: () => {
+        subtract: (amount: number, unit: string) => { toDate: () => Date };
+      };
+      isSame: (other: Date, unit: string) => boolean;
+      add: (amount: number, unit: string) => { toDate: () => Date };
+      toDate: () => Date;
+    };
+    tz: {
+      guess: () => string;
+      zone: (tzid: string) => {
+        utcOffset: (timestamp: number) => number;
+      } | null;
+    };
+  }> {
+    if (this.momentRuntime) {
+      return this.momentRuntime;
+    }
+
+    try {
+      const momentModule = await import("moment");
+      const timezoneModule = await import("moment-timezone");
+      const momentCandidate = (
+        "default" in momentModule ? momentModule.default : momentModule
+      ) as {
+        (value?: Date): {
+          utcOffset: () => number;
+          clone: () => {
+            subtract: (amount: number, unit: string) => { toDate: () => Date };
+          };
+          isSame: (other: Date, unit: string) => boolean;
+          add: (amount: number, unit: string) => { toDate: () => Date };
+          toDate: () => Date;
+        };
+      };
+      const timezoneCandidate = timezoneModule as {
+        tz?: {
+          guess: () => string;
+          zone: (tzid: string) => {
+            utcOffset: (timestamp: number) => number;
+          } | null;
+        };
+      };
+
+      if (typeof momentCandidate !== "function" || !timezoneCandidate.tz) {
+        throw new Error("moment runtime is unavailable");
+      }
+
+      this.momentRuntime = {
+        moment: momentCandidate,
+        tz: timezoneCandidate.tz,
+      };
+      return this.momentRuntime;
+    } catch (error) {
+      const formattedError = this.formatErrorForDebug(error);
+      this.appendDebugLog(`Moment runtime load failed: ${formattedError}`);
+      throw new Error(`Unable to load moment runtime: ${formattedError}`);
     }
   }
 
@@ -1740,6 +1817,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     const nodeIcal = await this.loadNodeIcal();
+    await this.loadMomentRuntime();
     const calendarEntries = Object.values(
       nodeIcal.parseICS(rawCalendar) as Record<string, any>,
     );
@@ -1871,6 +1949,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     dayStart: Date,
     dayEnd: Date,
   ): Array<{ start: Date; end: Date }> {
+    const momentRuntime = this.momentRuntime;
     const startDate =
       calendarEntry.start instanceof Date
         ? calendarEntry.start
@@ -1901,7 +1980,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
       for (const occurrenceStart of occurrenceStarts) {
         if (
-          this.nodeIcalHasExcludedOccurrence(calendarEntry, occurrenceStart)
+          momentRuntime &&
+          this.nodeIcalHasExcludedOccurrence(
+            calendarEntry,
+            occurrenceStart,
+            momentRuntime,
+          )
         ) {
           continue;
         }
@@ -1918,6 +2002,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         const adjustedOccurrenceStart = this.adjustNodeIcalOccurrenceStart(
           calendarEntry,
           occurrenceStart,
+          momentRuntime,
         );
         occurrences.push({
           start: adjustedOccurrenceStart,
@@ -1936,6 +2021,17 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private nodeIcalHasExcludedOccurrence(
     calendarEntry: any,
     occurrenceStart: Date,
+    momentRuntime: {
+      moment: (value?: Date) => {
+        utcOffset: () => number;
+        clone: () => {
+          subtract: (amount: number, unit: string) => { toDate: () => Date };
+        };
+        isSame: (other: Date, unit: string) => boolean;
+        add: (amount: number, unit: string) => { toDate: () => Date };
+        toDate: () => Date;
+      };
+    },
   ): boolean {
     const exdates = Object.values(calendarEntry.exdate ?? {}) as any[];
     return exdates.some((exceptionDateValue) => {
@@ -1950,19 +2046,38 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         return false;
       }
 
-      const occurrenceMoment = moment(occurrenceStart);
+      const occurrenceMoment = momentRuntime.moment(occurrenceStart);
       const utcOffset = occurrenceMoment.utcOffset();
       const occurrenceDateWithoutOffset = occurrenceMoment
         .clone()
         .subtract(utcOffset, "minutes");
 
-      return moment(exceptionDate).isSame(occurrenceDateWithoutOffset, "day");
+      return momentRuntime
+        .moment(exceptionDate)
+        .isSame(occurrenceDateWithoutOffset.toDate(), "day");
     });
   }
 
   private adjustNodeIcalOccurrenceStart(
     calendarEntry: any,
     occurrenceStart: Date,
+    momentRuntime: {
+      moment: (value?: Date) => {
+        utcOffset: () => number;
+        clone: () => {
+          subtract: (amount: number, unit: string) => { toDate: () => Date };
+        };
+        isSame: (other: Date, unit: string) => boolean;
+        add: (amount: number, unit: string) => { toDate: () => Date };
+        toDate: () => Date;
+      };
+      tz: {
+        guess: () => string;
+        zone: (tzid: string) => {
+          utcOffset: (timestamp: number) => number;
+        } | null;
+      };
+    },
   ): Date {
     const tzid = calendarEntry.rrule?.origOptions?.tzid;
     if (!tzid) {
@@ -1975,44 +2090,90 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         ? calendarEntry.start
         : new Date(calendarEntry.start ?? occurrenceStart),
       occurrenceStart,
+      momentRuntime,
     );
-    adjustedMoment = this.adjustForOtherZones(tzid, adjustedMoment.toDate());
+    adjustedMoment = this.adjustForOtherZones(
+      tzid,
+      adjustedMoment.toDate(),
+      momentRuntime,
+    );
     return adjustedMoment.toDate();
   }
 
-  private adjustForOtherZones(tzid: string, currentDate: Date) {
-    const localTzid = tz.guess();
+  private adjustForOtherZones(
+    tzid: string,
+    currentDate: Date,
+    momentRuntime: {
+      moment: (value?: Date) => {
+        utcOffset: () => number;
+        clone: () => {
+          subtract: (amount: number, unit: string) => { toDate: () => Date };
+        };
+        isSame: (other: Date, unit: string) => boolean;
+        add: (amount: number, unit: string) => { toDate: () => Date };
+        toDate: () => Date;
+      };
+      tz: {
+        guess: () => string;
+        zone: (tzid: string) => {
+          utcOffset: (timestamp: number) => number;
+        } | null;
+      };
+    },
+  ) {
+    const localTzid = momentRuntime.tz.guess();
 
     if (tzid === localTzid) {
-      return moment(currentDate);
+      return momentRuntime.moment(currentDate);
     }
 
-    const localTimezone = tz.zone(localTzid);
-    const originalTimezone = tz.zone(tzid);
+    const localTimezone = momentRuntime.tz.zone(localTzid);
+    const originalTimezone = momentRuntime.tz.zone(tzid);
 
     if (!localTimezone || !originalTimezone) {
-      return moment(currentDate);
+      return momentRuntime.moment(currentDate);
     }
 
     const offset =
       localTimezone.utcOffset(currentDate.getTime()) -
       originalTimezone.utcOffset(currentDate.getTime());
 
-    return moment(currentDate).add(offset, "minutes");
+    return momentRuntime.moment(currentDate).add(offset, "minutes");
   }
 
-  private adjustForDst(tzid: string, originalDate: Date, currentDate: Date) {
-    const timezone = tz.zone(tzid);
+  private adjustForDst(
+    tzid: string,
+    originalDate: Date,
+    currentDate: Date,
+    momentRuntime: {
+      moment: (value?: Date) => {
+        utcOffset: () => number;
+        clone: () => {
+          subtract: (amount: number, unit: string) => { toDate: () => Date };
+        };
+        isSame: (other: Date, unit: string) => boolean;
+        add: (amount: number, unit: string) => { toDate: () => Date };
+        toDate: () => Date;
+      };
+      tz: {
+        guess: () => string;
+        zone: (tzid: string) => {
+          utcOffset: (timestamp: number) => number;
+        } | null;
+      };
+    },
+  ) {
+    const timezone = momentRuntime.tz.zone(tzid);
 
     if (!timezone) {
-      return moment(currentDate);
+      return momentRuntime.moment(currentDate);
     }
 
     const offset =
       timezone.utcOffset(currentDate.getTime()) -
       timezone.utcOffset(originalDate.getTime());
 
-    return moment(currentDate).add(offset, "minutes");
+    return momentRuntime.moment(currentDate).add(offset, "minutes");
   }
 
   private findNodeIcalOverrideOccurrence(
