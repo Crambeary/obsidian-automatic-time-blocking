@@ -1,0 +1,53 @@
+# Running Log
+
+This file is the ongoing development log for the plugin.
+
+It is meant for implementation notes, prototype reality, and recent behavior changes.
+
+## Current Prototype Snapshot
+
+The plugin currently supports:
+
+- generating time blocks for the active note
+- configurable planner heading text and heading level
+- configurable day start, work day end, start interval, and default duration
+- optional split scheduling across gaps
+- optional breaks between generated blocks
+- remote calendar busy-time avoidance with optional before and after buffers
+- optional ignored calendar event title patterns
+- task intake from the active note
+- optional external task intake from configured notes and folders
+- Dataview-backed indexed external discovery when Dataview is installed
+- task date matching using `📅`, `⏳`, `🛫`, and `>YYYY-MM-DD`
+- bidirectional completion sync between generated planner tasks and source tasks
+- same-note directional completion sync support
+- in-memory debug logging
+
+## Manual Time Blocks
+
+Recent additions:
+
+- bullet-point manual block parsing from the active note
+- block syntax accepts both spaced and unspaced ranges such as `09:00 - 17:00` and `09:00-17:00`
+- block labels may be written as plain words like `work` or hashtags like `#work`
+- overlapping manual blocks are segmented into effective tagged windows
+- matching tagged tasks are prioritized into matching manual block windows
+- higher-strength tag matches are preferred over lower-strength matches
+- manual blocks behave as preferred placement windows rather than resetting the global queue start for all later tasks
+- debug logging records detected blocks, skipped lines, and derived windows
+- externally discovered generated planner tasks are skipped during source intake so prior planning notes are not re-imported as source tasks
+
+## Not Implemented Yet
+
+- direct Obsidian Tasks plugin API integration
+- direct reuse of Day Planner internal remote calendar state
+- Kanban note parsing
+- richer scheduling policies and heuristics
+- richer metadata preservation rules
+- dedicated settings UI for manual block behavior
+
+## Developer Docs
+
+- setup and local development: [`docs/development.md`](development.md)
+- manual block implementation plan: [`docs/manual-blocks-development.md`](manual-blocks-development.md)
+- user-facing manual block guide: [`docs/manual-time-blocks.md`](manual-time-blocks.md)
