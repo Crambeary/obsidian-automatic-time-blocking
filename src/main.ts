@@ -2095,14 +2095,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           segmentIndex,
           scheduledSegment,
         ] of fallbackSegments.entries()) {
+          const segmentCount = fallbackSegments.length;
           const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
           if (segmentIndex === 0) {
-            renderedLines.push(...this.buildRenderedTaskLines(task, prefix));
+            renderedLines.push(
+              ...this.buildRenderedTaskLines(
+                task,
+                prefix,
+                0,
+                segmentIndex,
+                segmentCount,
+              ),
+            );
             continue;
           }
 
           renderedLines.push(
-            `- [${task.statusMarker}] ${prefix}${this.escapePlannerDateTokens(task.text)}`,
+            `- [${task.statusMarker}] ${prefix}${this.buildRenderedTaskText(task, segmentIndex, segmentCount)}`,
           );
         }
         scheduledTaskEntries.push({
@@ -2126,14 +2135,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         segmentIndex,
         scheduledSegment,
       ] of scheduledSegments.entries()) {
+        const segmentCount = scheduledSegments.length;
         const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
         if (segmentIndex === 0) {
-          renderedLines.push(...this.buildRenderedTaskLines(task, prefix));
+          renderedLines.push(
+            ...this.buildRenderedTaskLines(
+              task,
+              prefix,
+              0,
+              segmentIndex,
+              segmentCount,
+            ),
+          );
           continue;
         }
 
         renderedLines.push(
-          `- [${task.statusMarker}] ${prefix}${this.escapePlannerDateTokens(task.text)}`,
+          `- [${task.statusMarker}] ${prefix}${this.buildRenderedTaskText(task, segmentIndex, segmentCount)}`,
         );
       }
       scheduledTaskEntries.push({
@@ -2573,13 +2591,34 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return `${"#".repeat(normalizedPlannerHeadingLevel + 1)} ${title}`;
   }
 
+  private buildRenderedTaskText(
+    task: ParsedTask,
+    segmentIndex?: number,
+    segmentCount?: number,
+  ): string {
+    const segmentLabel =
+      typeof segmentIndex === "number" &&
+      typeof segmentCount === "number" &&
+      segmentCount > 1
+        ? ` [${segmentIndex + 1}/${segmentCount}]`
+        : "";
+
+    return `${this.escapePlannerDateTokens(task.text)}${segmentLabel}${this.buildTaskSourceBacklink(task)}`;
+  }
+
   private buildRenderedTaskLines(
     task: ParsedTask,
     prefix = "",
     depth = 0,
+    segmentIndex?: number,
+    segmentCount?: number,
   ): string[] {
     const indentation = "    ".repeat(depth);
-    const renderedTaskText = `${this.escapePlannerDateTokens(task.text)}${this.buildTaskSourceBacklink(task)}`;
+    const renderedTaskText = this.buildRenderedTaskText(
+      task,
+      segmentIndex,
+      segmentCount,
+    );
     const renderedLines = [
       `${indentation}- [${task.statusMarker}] ${prefix}${renderedTaskText}`,
     ];
