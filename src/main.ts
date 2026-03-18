@@ -2006,13 +2006,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         (task) => this.extractNormalizedTagsFromText(task.text).length > 0,
       )
       .sort((leftTask, rightTask) => {
-        const priorityRankDifference =
-          this.getTaskPriorityRank(rightTask.priority) -
-          this.getTaskPriorityRank(leftTask.priority);
-        if (priorityRankDifference !== 0) {
-          return priorityRankDifference;
-        }
-
         const leftConstraint = this.getTaskSchedulingConstraint(
           leftTask,
           manualBlockWindows,
@@ -2028,6 +2021,20 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
         if (rightConstraint) {
           taskSchedulingConstraints.set(rightTask, rightConstraint);
+        }
+
+        const matchScoreDifference =
+          (rightConstraint?.matchScore ?? 0) -
+          (leftConstraint?.matchScore ?? 0);
+        if (matchScoreDifference !== 0) {
+          return matchScoreDifference;
+        }
+
+        const priorityRankDifference =
+          this.getTaskPriorityRank(rightTask.priority) -
+          this.getTaskPriorityRank(leftTask.priority);
+        if (priorityRankDifference !== 0) {
+          return priorityRankDifference;
         }
 
         const specificityDifference =
@@ -2071,7 +2078,46 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      if (scheduledSegments.length === 0) {
+      let combinedScheduledSegments = scheduledSegments;
+      let isPartiallyScheduled = scheduledResult?.isPartial ?? false;
+
+      if (
+        schedulingConstraint &&
+        scheduledSegments.length > 0 &&
+        scheduledResult?.isPartial
+      ) {
+        const scheduledDurationMinutes = scheduledSegments.reduce(
+          (totalDuration, segment) =>
+            totalDuration + (segment.endMinutes - segment.startMinutes),
+          0,
+        );
+        const remainingDurationMinutes =
+          task.durationMinutes - scheduledDurationMinutes;
+
+        if (remainingDurationMinutes > 0) {
+          const continuationTask: ParsedTask = {
+            ...task,
+            durationMinutes: remainingDurationMinutes,
+          };
+          const continuationSchedule = this.scheduleAutomaticTaskSegments(
+            continuationTask,
+            scheduledSegments[scheduledSegments.length - 1].endMinutes,
+            occupiedRanges,
+            workDayEndMinutes,
+          );
+          const continuationSegments = continuationSchedule?.segments ?? [];
+
+          if (continuationSegments.length > 0) {
+            combinedScheduledSegments = [
+              ...scheduledSegments,
+              ...continuationSegments,
+            ];
+            isPartiallyScheduled = continuationSchedule?.isPartial ?? false;
+          }
+        }
+      }
+
+      if (combinedScheduledSegments.length === 0) {
         const fallbackSchedule = this.scheduleAutomaticTaskSegments(
           task,
           currentAutomaticStartMinutes,
@@ -2127,15 +2173,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       }
 
       scheduledTaskCount += 1;
-      if (scheduledResult?.isPartial) {
+      if (isPartiallyScheduled) {
         partiallyScheduledTaskCount += 1;
       }
       const renderedLines: string[] = [];
       for (const [
         segmentIndex,
         scheduledSegment,
-      ] of scheduledSegments.entries()) {
-        const segmentCount = scheduledSegments.length;
+      ] of combinedScheduledSegments.entries()) {
+        const segmentCount = combinedScheduledSegments.length;
         const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
         if (segmentIndex === 0) {
           renderedLines.push(
@@ -2155,12 +2201,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         );
       }
       scheduledTaskEntries.push({
-        startMinutes: scheduledSegments[0].startMinutes,
+        startMinutes: combinedScheduledSegments[0].startMinutes,
         lines: renderedLines,
       });
 
       const finalScheduledSegment =
-        scheduledSegments[scheduledSegments.length - 1];
+        combinedScheduledSegments[combinedScheduledSegments.length - 1];
       if (!schedulingConstraint) {
         currentAutomaticStartMinutes =
           finalScheduledSegment.endMinutes + breakDurationMinutes;
