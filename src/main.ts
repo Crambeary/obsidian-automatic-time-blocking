@@ -1159,7 +1159,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       activeContent,
       activeFile.path,
       selectedTaskStatuses,
-    );
+    ).filter((task) => {
+      const dateTokens = this.extractTasksDateTokens(task.text);
+      if (dateTokens.length === 0) {
+        return true;
+      }
+      return this.externalTaskMatchesPlanningDate(task.text, planningDate);
+    });
     const externalTaskDiscovery = this.getExternalTaskDiscovery(
       activeFile,
       planningDate,
