@@ -42,6 +42,14 @@ interface TimeRange {
   endMinutes: number;
 }
 
+interface ManualBlockDefinition extends TimeRange {
+  tags: string[];
+}
+
+interface TaggedAvailabilityWindow extends TimeRange {
+  tags: string[];
+}
+
 interface CalendarBusyRange extends TimeRange {
   summary: string;
   uid: string;
@@ -198,6 +206,11 @@ interface ParsedTaskTimeRange {
   startMinutes: number;
   endMinutes: number;
   durationMinutes: number;
+}
+
+interface TaskSchedulingConstraint {
+  matchingWindows: TaggedAvailabilityWindow[];
+  matchScore: number;
 }
 
 interface GeneratedTimeBlocks {
@@ -1072,10 +1085,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const { busyRanges, failedCalendarCount } =
       await this.getCalendarPreviewData(planningDate, false);
+    const manualBlocks = this.extractManualBlockDefinitions(content);
+    this.appendDebugLog(
+      `Manual blocks detected for ${view.file.path}: ${manualBlocks.length === 0 ? "none" : manualBlocks.map((block) => `${this.formatMinutesAsTime(block.startMinutes)}-${this.formatMinutesAsTime(block.endMinutes)} [${block.tags.join(", ")}]`).join("; ")}`,
+    );
     const generatedTimeBlocks = this.buildTimeBlockLines(
       tasks,
       busyRanges,
       planningDate,
+      manualBlocks,
     );
 
     if (generatedTimeBlocks.scheduledLines.length === 0) {
@@ -1286,6 +1304,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
       const indentMatch = line.match(/^(\s*)[-*]\s+\[([^\]])\]\s+/);
       const rawText = taskMatch[2].trim();
+      if (isExternalSource && this.looksLikeGeneratedPlannerTask(rawText)) {
+        this.appendDebugLog(
+          `Skipped externally discovered generated planner task from ${sourcePath}:${index + 1}: ${rawText}`,
+        );
+        continue;
+      }
       const parsedTimeRange = this.parseExplicitTaskTimeRange(rawText);
       const durationMinutes =
         parsedTimeRange?.durationMinutes ?? this.parseDurationMinutes(rawText);
@@ -1867,6 +1891,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return ` [[${normalizedPath}|↗]]`;
   }
 
+  private looksLikeGeneratedPlannerTask(taskText: string): boolean {
+    const hasExplicitTimePrefix = /^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/.test(
+      taskText,
+    );
+    const hasPluginBacklink = /\[\[[^\]]+\|↗\]\]/.test(taskText);
+    return hasExplicitTimePrefix && hasPluginBacklink;
+  }
+
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
       /(^|\s)(?:([📅⏳🛫])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
@@ -1895,8 +1927,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     tasks: ParsedTask[],
     busyRanges: TimeRange[],
     planningDate: Date,
+    manualBlocks: ManualBlockDefinition[] = [],
   ): GeneratedTimeBlocks {
-    const scheduledLines: string[] = [];
+    const scheduledTaskEntries: Array<{
+      startMinutes: number;
+      lines: string[];
+    }> = [];
     const unscheduledLines: string[] = [];
     let scheduledTaskCount = 0;
     let partiallyScheduledTaskCount = 0;
@@ -1916,6 +1952,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       this.settings.dayStartTime,
     );
     const workDayEndMinutes = this.getWorkDayEndMinutes();
+    const manualBlockWindows = this.buildTaggedAvailabilityWindows(
+      manualBlocks,
+      configuredDayStartMinutes,
+      workDayEndMinutes,
+    );
     const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
     let skippedTaskCount = 0;
     const occupiedRanges = this.normalizeTimeRanges([
@@ -1942,30 +1983,98 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       }
 
       scheduledTaskCount += 1;
-      scheduledLines.push(
-        ...this.buildRenderedTaskLines(
+      scheduledTaskEntries.push({
+        startMinutes: manualStartMinutes,
+        lines: this.buildRenderedTaskLines(
           task,
           `${this.formatMinutesAsTime(manualStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} `,
         ),
-      );
+      });
       this.insertTimeRange(occupiedRanges, {
         startMinutes: manualStartMinutes,
         endMinutes: endMinutes + breakDurationMinutes,
       });
     }
 
-    for (const task of automaticTasks) {
-      const scheduledResult = this.scheduleAutomaticTaskSegments(
+    const taggedAutomaticTasks = automaticTasks.filter(
+      (task) => this.extractNormalizedTagsFromText(task.text).length > 0,
+    );
+    const untaggedAutomaticTasks = automaticTasks.filter(
+      (task) => this.extractNormalizedTagsFromText(task.text).length === 0,
+    );
+
+    for (const task of [...taggedAutomaticTasks, ...untaggedAutomaticTasks]) {
+      const schedulingConstraint = this.getTaskSchedulingConstraint(
         task,
-        currentAutomaticStartMinutes,
-        occupiedRanges,
-        workDayEndMinutes,
+        manualBlockWindows,
       );
+      const schedulingStartMinutes = schedulingConstraint
+        ? this.getInitialStartMinutes(planningDate)
+        : currentAutomaticStartMinutes;
+      const scheduledResult = schedulingConstraint
+        ? this.scheduleAutomaticTaskSegmentsWithinWindows(
+            task,
+            schedulingStartMinutes,
+            occupiedRanges,
+            schedulingConstraint.matchingWindows,
+          )
+        : this.scheduleAutomaticTaskSegments(
+            task,
+            schedulingStartMinutes,
+            occupiedRanges,
+            workDayEndMinutes,
+          );
       const scheduledSegments = scheduledResult?.segments ?? [];
 
-      if (scheduledSegments.length === 0) {
+      if (scheduledSegments.length === 0 && schedulingConstraint) {
         skippedTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
+        continue;
+      }
+
+      if (scheduledSegments.length === 0) {
+        const fallbackSchedule = this.scheduleAutomaticTaskSegments(
+          task,
+          currentAutomaticStartMinutes,
+          occupiedRanges,
+          workDayEndMinutes,
+        );
+        const fallbackSegments = fallbackSchedule?.segments ?? [];
+
+        if (fallbackSegments.length === 0) {
+          skippedTaskCount += 1;
+          unscheduledLines.push(...this.buildRenderedTaskLines(task));
+          continue;
+        }
+
+        scheduledTaskCount += 1;
+        if (fallbackSchedule?.isPartial) {
+          partiallyScheduledTaskCount += 1;
+        }
+        const renderedLines: string[] = [];
+        for (const [
+          segmentIndex,
+          scheduledSegment,
+        ] of fallbackSegments.entries()) {
+          const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
+          if (segmentIndex === 0) {
+            renderedLines.push(...this.buildRenderedTaskLines(task, prefix));
+            continue;
+          }
+
+          renderedLines.push(
+            `- [${task.statusMarker}] ${prefix}${this.escapePlannerDateTokens(task.text)}`,
+          );
+        }
+        scheduledTaskEntries.push({
+          startMinutes: fallbackSegments[0].startMinutes,
+          lines: renderedLines,
+        });
+
+        const finalFallbackSegment =
+          fallbackSegments[fallbackSegments.length - 1];
+        currentAutomaticStartMinutes =
+          finalFallbackSegment.endMinutes + breakDurationMinutes;
         continue;
       }
 
@@ -1973,26 +2082,40 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       if (scheduledResult?.isPartial) {
         partiallyScheduledTaskCount += 1;
       }
+      const renderedLines: string[] = [];
       for (const [
         segmentIndex,
         scheduledSegment,
       ] of scheduledSegments.entries()) {
         const prefix = `${this.formatMinutesAsTime(scheduledSegment.startMinutes)}-${this.formatMinutesAsTime(scheduledSegment.endMinutes)} `;
         if (segmentIndex === 0) {
-          scheduledLines.push(...this.buildRenderedTaskLines(task, prefix));
+          renderedLines.push(...this.buildRenderedTaskLines(task, prefix));
           continue;
         }
 
-        scheduledLines.push(
+        renderedLines.push(
           `- [${task.statusMarker}] ${prefix}${this.escapePlannerDateTokens(task.text)}`,
         );
       }
+      scheduledTaskEntries.push({
+        startMinutes: scheduledSegments[0].startMinutes,
+        lines: renderedLines,
+      });
 
       const finalScheduledSegment =
         scheduledSegments[scheduledSegments.length - 1];
-      currentAutomaticStartMinutes =
-        finalScheduledSegment.endMinutes + breakDurationMinutes;
+      if (!schedulingConstraint) {
+        currentAutomaticStartMinutes =
+          finalScheduledSegment.endMinutes + breakDurationMinutes;
+      }
     }
+
+    const scheduledLines = scheduledTaskEntries
+      .sort(
+        (leftEntry, rightEntry) =>
+          leftEntry.startMinutes - rightEntry.startMinutes,
+      )
+      .flatMap((entry) => entry.lines);
 
     return {
       scheduledLines,
@@ -2000,6 +2123,378 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       scheduledTaskCount,
       skippedTaskCount,
       partiallyScheduledTaskCount,
+    };
+  }
+
+  private extractManualBlockDefinitions(
+    content: string,
+  ): ManualBlockDefinition[] {
+    const manualBlockPattern =
+      /^\s*[-*]\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?=\s|$)(.*)$/;
+    const lines = content.split(/\r?\n/);
+    const plannerSectionRange = this.findHeadingSectionRange(
+      lines,
+      this.settings.plannerHeading,
+      this.settings.plannerHeadingLevel,
+    );
+    const manualBlocks: ManualBlockDefinition[] = [];
+
+    for (const [index, line] of lines.entries()) {
+      if (
+        plannerSectionRange &&
+        index >= plannerSectionRange.start &&
+        index < plannerSectionRange.end
+      ) {
+        const blockInsidePlannerSection = line.match(manualBlockPattern);
+        if (blockInsidePlannerSection) {
+          this.appendDebugLog(
+            `Manual block parser skipped line ${index + 1} because it is inside the generated planner heading: ${line.trim()}`,
+          );
+        }
+        continue;
+      }
+
+      const blockMatch = line.match(manualBlockPattern);
+      if (!blockMatch) {
+        continue;
+      }
+
+      const startMinutes = this.parseTimeToMinutesOrNull(blockMatch[1]);
+      const endMinutes = this.parseTimeToMinutesOrNull(blockMatch[2]);
+      if (
+        startMinutes === null ||
+        endMinutes === null ||
+        endMinutes <= startMinutes
+      ) {
+        this.appendDebugLog(
+          `Manual block parser skipped line ${index + 1} due to invalid time range: ${line.trim()}`,
+        );
+        continue;
+      }
+
+      const tags = this.extractNormalizedManualBlockTagsFromText(
+        blockMatch[3] ?? "",
+      );
+      if (tags.length === 0) {
+        this.appendDebugLog(
+          `Manual block parser skipped line ${index + 1} because no tags were found: ${line.trim()}`,
+        );
+        continue;
+      }
+
+      manualBlocks.push({
+        startMinutes,
+        endMinutes,
+        tags,
+      });
+      this.appendDebugLog(
+        `Manual block parser accepted line ${index + 1}: ${this.formatMinutesAsTime(startMinutes)}-${this.formatMinutesAsTime(endMinutes)} [${tags.join(", ")}]`,
+      );
+    }
+
+    if (manualBlocks.length === 0) {
+      this.appendDebugLog(
+        "Manual block parser found no tagged manual block bullets in the active note.",
+      );
+    }
+
+    return manualBlocks;
+  }
+
+  private buildTaggedAvailabilityWindows(
+    manualBlocks: ManualBlockDefinition[],
+    dayStartMinutes: number,
+    workDayEndMinutes: number,
+  ): TaggedAvailabilityWindow[] {
+    if (manualBlocks.length === 0) {
+      this.appendDebugLog(
+        "Manual block windows: none derived because no manual blocks were detected.",
+      );
+      return [];
+    }
+
+    const clampedBlocks = manualBlocks
+      .map((block) => ({
+        startMinutes: Math.max(block.startMinutes, dayStartMinutes),
+        endMinutes: Math.min(block.endMinutes, workDayEndMinutes),
+        tags: block.tags,
+      }))
+      .filter((block) => block.endMinutes > block.startMinutes);
+
+    if (clampedBlocks.length !== manualBlocks.length) {
+      const droppedBlockCount = manualBlocks.length - clampedBlocks.length;
+      this.appendDebugLog(
+        `Manual block windows: dropped ${droppedBlockCount} block${droppedBlockCount === 1 ? "" : "s"} after clamping to the configured work day ${this.formatMinutesAsTime(dayStartMinutes)}-${this.formatMinutesAsTime(workDayEndMinutes)}.`,
+      );
+    }
+
+    if (clampedBlocks.length === 0) {
+      this.appendDebugLog(
+        "Manual block windows: none remained after clamping to the configured work day.",
+      );
+      return [];
+    }
+
+    const boundaries = [
+      ...new Set(
+        clampedBlocks.flatMap((block) => [
+          block.startMinutes,
+          block.endMinutes,
+        ]),
+      ),
+    ].sort((leftBoundary, rightBoundary) => leftBoundary - rightBoundary);
+    const windows: TaggedAvailabilityWindow[] = [];
+
+    for (let index = 0; index < boundaries.length - 1; index += 1) {
+      const segmentStart = boundaries[index];
+      const segmentEnd = boundaries[index + 1];
+      if (segmentEnd <= segmentStart) {
+        continue;
+      }
+
+      const activeTags = this.normalizeTagList(
+        clampedBlocks
+          .filter(
+            (block) =>
+              block.startMinutes < segmentEnd &&
+              block.endMinutes > segmentStart,
+          )
+          .flatMap((block) => block.tags),
+      );
+      if (activeTags.length === 0) {
+        continue;
+      }
+
+      const previousWindow = windows[windows.length - 1];
+      if (
+        previousWindow &&
+        previousWindow.endMinutes === segmentStart &&
+        this.haveSameNormalizedTags(previousWindow.tags, activeTags)
+      ) {
+        previousWindow.endMinutes = segmentEnd;
+        continue;
+      }
+
+      windows.push({
+        startMinutes: segmentStart,
+        endMinutes: segmentEnd,
+        tags: activeTags,
+      });
+    }
+
+    this.appendDebugLog(
+      `Manual block windows derived: ${windows.map((window) => `${this.formatMinutesAsTime(window.startMinutes)}-${this.formatMinutesAsTime(window.endMinutes)} [${window.tags.join(", ")}]`).join("; ")}`,
+    );
+
+    return windows;
+  }
+
+  private extractNormalizedManualBlockTagsFromText(
+    blockText: string,
+  ): string[] {
+    const hashtagTags = this.extractNormalizedTagsFromText(blockText);
+    if (hashtagTags.length > 0) {
+      return hashtagTags;
+    }
+
+    const bareWordMatches = blockText.match(/[A-Za-z0-9][\w/-]*/g) ?? [];
+    return this.normalizeTagList(bareWordMatches);
+  }
+
+  private extractNormalizedTagsFromText(taskText: string): string[] {
+    const tagPattern = /(^|\s)#([A-Za-z0-9][\w/-]*)/g;
+    const tags: string[] = [];
+    let tagMatch = tagPattern.exec(taskText);
+
+    while (tagMatch) {
+      if (tagMatch[2]) {
+        tags.push(tagMatch[2]);
+      }
+
+      tagMatch = tagPattern.exec(taskText);
+    }
+
+    return this.normalizeTagList(tags);
+  }
+
+  private normalizeTagList(tags: string[]): string[] {
+    return [
+      ...new Set(
+        tags
+          .map((tag) => tag.trim().toLowerCase())
+          .filter((tag) => tag.length > 0),
+      ),
+    ].sort();
+  }
+
+  private haveSameNormalizedTags(
+    leftTags: string[],
+    rightTags: string[],
+  ): boolean {
+    if (leftTags.length !== rightTags.length) {
+      return false;
+    }
+
+    return leftTags.every((tag, index) => tag === rightTags[index]);
+  }
+
+  private getTaskSchedulingConstraint(
+    task: ParsedTask,
+    manualBlockWindows: TaggedAvailabilityWindow[],
+  ): TaskSchedulingConstraint | null {
+    if (manualBlockWindows.length === 0) {
+      return null;
+    }
+
+    const taskTags = this.extractNormalizedTagsFromText(task.text);
+    if (taskTags.length === 0) {
+      return null;
+    }
+
+    const scoredWindows = manualBlockWindows
+      .map((window) => ({
+        window,
+        score: taskTags.filter((tag) => window.tags.includes(tag)).length,
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((leftEntry, rightEntry) => {
+        if (rightEntry.score !== leftEntry.score) {
+          return rightEntry.score - leftEntry.score;
+        }
+
+        return leftEntry.window.startMinutes - rightEntry.window.startMinutes;
+      });
+
+    if (scoredWindows.length === 0) {
+      return null;
+    }
+
+    return {
+      matchingWindows: scoredWindows.map((entry) => entry.window),
+      matchScore: scoredWindows[0].score,
+    };
+  }
+
+  private scheduleAutomaticTaskSegmentsWithinWindows(
+    task: ParsedTask,
+    proposedStartMinutes: number,
+    occupiedRanges: TimeRange[],
+    candidateWindows: TaggedAvailabilityWindow[],
+  ): ScheduledTaskSegmentsResult | null {
+    const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
+
+    if (!this.settings.splitTasksAcrossGaps) {
+      for (const window of candidateWindows) {
+        const candidateStartMinutes = Math.max(
+          proposedStartMinutes,
+          window.startMinutes,
+        );
+        const scheduledStartMinutes = this.findNextAvailableStartMinutes(
+          candidateStartMinutes,
+          task.durationMinutes,
+          occupiedRanges,
+          window.endMinutes,
+        );
+        const scheduledEndMinutes =
+          scheduledStartMinutes + task.durationMinutes;
+
+        if (
+          scheduledStartMinutes >= window.endMinutes ||
+          scheduledEndMinutes > window.endMinutes
+        ) {
+          continue;
+        }
+
+        this.insertTimeRange(occupiedRanges, {
+          startMinutes: scheduledStartMinutes,
+          endMinutes: scheduledEndMinutes + breakDurationMinutes,
+        });
+
+        return {
+          segments: [
+            {
+              startMinutes: scheduledStartMinutes,
+              endMinutes: scheduledEndMinutes,
+            },
+          ],
+          isPartial: false,
+        };
+      }
+
+      return null;
+    }
+
+    const candidateOccupiedRanges = occupiedRanges.map((range) => ({
+      ...range,
+    }));
+    const scheduledSegments: ScheduledTaskSegment[] = [];
+    let remainingDurationMinutes = task.durationMinutes;
+
+    for (const window of candidateWindows) {
+      let nextProposedStartMinutes = Math.max(
+        proposedStartMinutes,
+        window.startMinutes,
+      );
+
+      while (remainingDurationMinutes > 0) {
+        const availableWindow = this.findNextAvailableWindow(
+          nextProposedStartMinutes,
+          candidateOccupiedRanges,
+          window.endMinutes,
+        );
+
+        if (
+          availableWindow.startMinutes >= window.endMinutes ||
+          availableWindow.endMinutes <= availableWindow.startMinutes
+        ) {
+          break;
+        }
+
+        const constrainedStartMinutes = Math.max(
+          availableWindow.startMinutes,
+          window.startMinutes,
+        );
+        const constrainedEndMinutes = Math.min(
+          availableWindow.endMinutes,
+          window.endMinutes,
+        );
+        const availableDurationMinutes =
+          constrainedEndMinutes - constrainedStartMinutes;
+
+        if (availableDurationMinutes <= 0) {
+          break;
+        }
+
+        const scheduledDurationMinutes = Math.min(
+          remainingDurationMinutes,
+          availableDurationMinutes,
+        );
+        const scheduledSegment: ScheduledTaskSegment = {
+          startMinutes: constrainedStartMinutes,
+          endMinutes: constrainedStartMinutes + scheduledDurationMinutes,
+        };
+
+        scheduledSegments.push(scheduledSegment);
+        this.insertTimeRange(candidateOccupiedRanges, scheduledSegment);
+        remainingDurationMinutes -= scheduledDurationMinutes;
+        nextProposedStartMinutes = scheduledSegment.endMinutes;
+      }
+    }
+
+    if (scheduledSegments.length === 0) {
+      return null;
+    }
+
+    const finalScheduledSegment =
+      scheduledSegments[scheduledSegments.length - 1];
+    this.insertTimeRange(candidateOccupiedRanges, {
+      startMinutes: finalScheduledSegment.endMinutes,
+      endMinutes: finalScheduledSegment.endMinutes + breakDurationMinutes,
+    });
+    occupiedRanges.splice(0, occupiedRanges.length, ...candidateOccupiedRanges);
+    return {
+      segments: scheduledSegments,
+      isPartial: remainingDurationMinutes > 0,
     };
   }
 

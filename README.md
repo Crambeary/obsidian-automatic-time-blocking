@@ -27,6 +27,8 @@ What is implemented today:
 - generated planner lines for external-source tasks preserve a compact Obsidian backlink to the source note so you can jump back to where the task came from
 - preservation of open versus in-progress task markers in generated planner output, so `- [ ]`, `- [/]`, and `- [>]` stay aligned with the source task state
 - explicit task times override priority-based ordering, so a task with a manual start time is placed at that block instead of being moved by priority
+- daily-note manual block bullets such as `- 09:00-17:00 #work` can define tagged availability windows for automatic scheduling
+- overlapping manual block bullets are segmented into effective internal windows, so combinations like `#work` and `#high-energy` can both constrain scheduling during the overlap
 - generated output written under a configurable heading in the current note
 - generated blocks limited to the configured work day, with automatic scheduling able to either start at the next snapped interval or immediately from the current time when planning today, while non-today notes begin from the configured day start time
 - optional splitting of automatically scheduled tasks across multiple free gaps in the day
@@ -237,6 +239,9 @@ Current behavior:
 - generated planner lines preserve whether a source task was open (`[ ]`), in progress (`[/]`), or rescheduled (`[>]`)
 - manually timed tasks are honored at their specified start times, and their priority marker does not move them earlier or later
 - tasks without a manual start time are still scheduled automatically using the existing priority ordering rules
+- a non-task bullet such as `- 09:00-17:00 #work` is treated as a manual block definition instead of a source task
+- tagged automatic tasks try to use manual block windows whose tags overlap the task hashtags, preferring windows that match more of the task's tags
+- untagged automatic tasks, or tagged tasks with no matching manual block, can still use remaining free time after the stronger tagged matches have been attempted
 - automatic scheduling can either begin at the next snapped interval boundary or at the current time, based on settings
 - when enabled, automatic scheduling can split a task across multiple open gaps instead of skipping it when one continuous slot is unavailable
 - when enabled, split scheduling keeps any segments that fit in the remaining day even if the full requested duration cannot be placed
