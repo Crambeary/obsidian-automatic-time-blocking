@@ -88,6 +88,12 @@ type AutomaticStartMode = "snapped" | "now";
 type ExternalTaskDiscoveryMode = "built-in" | "dataview";
 type SelectableTaskStatus = "open" | "inProgress" | "rescheduled";
 
+interface TimeframeDefinition {
+  name: string;
+  startTime: string;
+  endTime: string;
+}
+
 const TASK_PRIORITY_RANKS: Record<TaskPriority, number> = {
   highest: 6,
   high: 5,
@@ -120,6 +126,7 @@ interface ObsidianAutomaticTimeBlockingSettings {
   enableCompletionSync: boolean;
   includeTasksWithText: string;
   excludeTasksWithText: string;
+  timeframes: TimeframeDefinition[];
 }
 
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
@@ -145,6 +152,13 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   enableCompletionSync: true,
   includeTasksWithText: "",
   excludeTasksWithText: "",
+  timeframes: [
+    { name: "early", startTime: "07:00", endTime: "08:30" },
+    { name: "morning", startTime: "08:30", endTime: "12:00" },
+    { name: "afternoon", startTime: "12:00", endTime: "18:00" },
+    { name: "evening", startTime: "18:00", endTime: "22:00" },
+    { name: "late", startTime: "22:00", endTime: "23:00" },
+  ],
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
@@ -223,6 +237,7 @@ interface GeneratedTimeBlocks {
   scheduledTaskCount: number;
   skippedTaskCount: number;
   partiallyScheduledTaskCount: number;
+  skippedTimeframeTaskCount: number;
 }
 
 interface ScheduledTaskSegment {
@@ -403,6 +418,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     this.completionSyncMappings = this.normalizeCompletionSyncMappings(
       loadedData?.completionSyncMappings,
+    );
+
+    this.settings.timeframes = this.normalizeTimeframes(
+      this.settings.timeframes,
     );
   }
 
@@ -1126,9 +1145,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const skippedCount = generatedTimeBlocks.skippedTaskCount;
     const partiallyScheduledCount =
       generatedTimeBlocks.partiallyScheduledTaskCount;
+    const skippedTimeframeTaskCount =
+      generatedTimeBlocks.skippedTimeframeTaskCount;
     const skippedSuffix =
       skippedCount > 0
         ? ` Skipped ${skippedCount} task${skippedCount === 1 ? "" : "s"} that would exceed the configured work day.`
+        : "";
+    const skippedTimeframeSuffix =
+      skippedTimeframeTaskCount > 0
+        ? ` ${skippedTimeframeTaskCount} timeframe-constrained task${skippedTimeframeTaskCount === 1 ? " was" : "s were"} left unblocked because no matching timeframe window was available.`
         : "";
     const partialSuffix =
       partiallyScheduledCount > 0
@@ -1149,7 +1174,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${partialSuffix}${skippedSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${partialSuffix}${skippedSuffix}${skippedTimeframeSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
     );
   }
 
@@ -1298,6 +1323,33 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       files: this.getScopedExternalTaskFiles(activeFile),
       usedDataviewIndex: false,
     };
+  }
+
+  private getDataviewIndexedExternalTaskFiles(
+    activeFile: TFile,
+    planningDate: Date,
+  ): TFile[] | null {
+    const dataviewApi = this.getDataviewApi();
+    if (!dataviewApi) {
+      return null;
+    }
+
+    const indexedPages = this.normalizeDataviewPages(dataviewApi.pages());
+    const resolvedMarkdownFiles = new Map<string, TFile>();
+
+    for (const page of indexedPages) {
+      const pagePath = page.file?.path;
+      if (!pagePath || pagePath === activeFile.path) {
+        continue;
+      }
+
+      const abstractFile = this.app.vault.getAbstractFileByPath(pagePath);
+      if (abstractFile instanceof TFile && abstractFile.extension === "md") {
+        resolvedMarkdownFiles.set(abstractFile.path, abstractFile);
+      }
+    }
+
+    return [...resolvedMarkdownFiles.values()];
   }
 
   private extractOpenTasks(
@@ -1669,35 +1721,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
   }
 
-  private getDataviewIndexedExternalTaskFiles(
-    activeFile: TFile,
-    planningDate: Date,
-  ): TFile[] | null {
-    const dataviewApi = this.getDataviewApi();
-    if (!dataviewApi) {
-      return null;
-    }
-
-    const indexedPages = this.normalizeDataviewPages(dataviewApi.pages());
-    const sourceFiles = new Map<string, TFile>();
-
-    for (const page of indexedPages) {
-      const pagePath = page.file?.path;
-      if (!pagePath || pagePath === activeFile.path) {
-        continue;
-      }
-
-      const abstractFile = this.app.vault.getAbstractFileByPath(pagePath);
-      if (abstractFile instanceof TFile && abstractFile.extension === "md") {
-        sourceFiles.set(abstractFile.path, abstractFile);
-      }
-    }
-
-    return [...sourceFiles.values()].sort((leftFile, rightFile) =>
-      leftFile.path.localeCompare(rightFile.path),
-    );
-  }
-
   private getDataviewApi(): DataviewApi | null {
     const plugins = (
       this.app as App & {
@@ -1926,7 +1949,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     taskText: string,
   ): ParsedTaskTimeRange | null {
     const timeRangeMatch = taskText.match(
-      /^\s*(\d{1,2}:\d{2})-(\d{1,2}:\d{2})(?=\s|$)/,
+      /^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?=\s|$)/,
     );
     if (!timeRangeMatch) {
       return null;
@@ -2039,8 +2062,17 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       configuredDayStartMinutes,
       workDayEndMinutes,
     );
+    const timeframeWindows = this.buildTaggedAvailabilityWindows(
+      this.buildTimeframeManualBlocks(
+        configuredDayStartMinutes,
+        workDayEndMinutes,
+      ),
+      configuredDayStartMinutes,
+      workDayEndMinutes,
+    );
     const breakDurationMinutes = this.getValidatedBreakDurationMinutes();
     let skippedTaskCount = 0;
+    let skippedTimeframeTaskCount = 0;
     const occupiedRanges = this.normalizeTimeRanges([
       ...busyRanges,
       { startMinutes: 0, endMinutes: configuredDayStartMinutes },
@@ -2088,13 +2120,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         (task) => this.extractNormalizedTagsFromText(task.text).length > 0,
       )
       .sort((leftTask, rightTask) => {
-        const leftConstraint = this.getTaskSchedulingConstraint(
+        const leftConstraint = this.getPreferredTaskSchedulingConstraint(
           leftTask,
           manualBlockWindows,
+          timeframeWindows,
         );
-        const rightConstraint = this.getTaskSchedulingConstraint(
+        const rightConstraint = this.getPreferredTaskSchedulingConstraint(
           rightTask,
           manualBlockWindows,
+          timeframeWindows,
         );
 
         if (leftConstraint) {
@@ -2119,6 +2153,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
           return priorityRankDifference;
         }
 
+        const earliestWindowDifference =
+          (leftConstraint?.matchingWindows[0]?.startMinutes ??
+            Number.MAX_SAFE_INTEGER) -
+          (rightConstraint?.matchingWindows[0]?.startMinutes ??
+            Number.MAX_SAFE_INTEGER);
+        if (earliestWindowDifference !== 0) {
+          return earliestWindowDifference;
+        }
+
         const specificityDifference =
           (rightConstraint?.matchScore ?? 0) -
           (leftConstraint?.matchScore ?? 0);
@@ -2133,9 +2176,23 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
 
     for (const task of [...taggedAutomaticTasks, ...untaggedAutomaticTasks]) {
+      const hasTimeframeTags = this.taskHasConfiguredTimeframeTag(task);
       const schedulingConstraint =
         taskSchedulingConstraints.get(task) ??
-        this.getTaskSchedulingConstraint(task, manualBlockWindows);
+        this.getPreferredTaskSchedulingConstraint(
+          task,
+          manualBlockWindows,
+          timeframeWindows,
+        );
+      if (hasTimeframeTags && !schedulingConstraint) {
+        skippedTaskCount += 1;
+        skippedTimeframeTaskCount += 1;
+        unscheduledLines.push(...this.buildRenderedTaskLines(task));
+        this.appendDebugLog(
+          `Timeframe-constrained task could not be scheduled because no matching timeframe window is available within the configured workday: ${task.text}`,
+        );
+        continue;
+      }
       const schedulingStartMinutes = schedulingConstraint
         ? this.getInitialStartMinutes(planningDate)
         : currentAutomaticStartMinutes;
@@ -2156,6 +2213,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
       if (scheduledSegments.length === 0 && schedulingConstraint) {
         skippedTaskCount += 1;
+        if (hasTimeframeTags) {
+          skippedTimeframeTaskCount += 1;
+        }
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
         continue;
       }
@@ -2210,6 +2270,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
         if (fallbackSegments.length === 0) {
           skippedTaskCount += 1;
+          if (hasTimeframeTags) {
+            skippedTimeframeTaskCount += 1;
+          }
           unscheduledLines.push(...this.buildRenderedTaskLines(task));
           continue;
         }
@@ -2308,6 +2371,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       scheduledTaskCount,
       skippedTaskCount,
       partiallyScheduledTaskCount,
+      skippedTimeframeTaskCount,
     };
   }
 
@@ -2384,6 +2448,41 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return manualBlocks;
+  }
+
+  private buildTimeframeManualBlocks(
+    dayStartMinutes: number,
+    workDayEndMinutes: number,
+  ): ManualBlockDefinition[] {
+    const timeframeBlocks: ManualBlockDefinition[] = [];
+
+    for (const timeframe of this.normalizeTimeframes(
+      this.settings.timeframes,
+    )) {
+      const startMinutes = this.parseTimeToMinutesOrNull(timeframe.startTime);
+      const endMinutes = this.parseTimeToMinutesOrNull(timeframe.endTime);
+      if (
+        startMinutes === null ||
+        endMinutes === null ||
+        endMinutes <= startMinutes
+      ) {
+        continue;
+      }
+
+      const clampedStartMinutes = Math.max(startMinutes, dayStartMinutes);
+      const clampedEndMinutes = Math.min(endMinutes, workDayEndMinutes);
+      if (clampedEndMinutes <= clampedStartMinutes) {
+        continue;
+      }
+
+      timeframeBlocks.push({
+        startMinutes: clampedStartMinutes,
+        endMinutes: clampedEndMinutes,
+        tags: [timeframe.name],
+      });
+    }
+
+    return timeframeBlocks;
   }
 
   private buildTaggedAvailabilityWindows(
@@ -2521,6 +2620,44 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     ].sort();
   }
 
+  private normalizeTimeframes(
+    timeframes: TimeframeDefinition[] | undefined,
+  ): TimeframeDefinition[] {
+    if (!Array.isArray(timeframes)) {
+      return DEFAULT_SETTINGS.timeframes.map((timeframe) => ({ ...timeframe }));
+    }
+
+    const normalizedNames = new Set<string>();
+    const normalizedTimeframes: TimeframeDefinition[] = [];
+    for (const timeframe of timeframes) {
+      if (!timeframe || typeof timeframe !== "object") {
+        continue;
+      }
+
+      const name =
+        typeof timeframe.name === "string"
+          ? timeframe.name.trim().toLowerCase()
+          : "";
+      const startTime =
+        typeof timeframe.startTime === "string"
+          ? timeframe.startTime.trim()
+          : DEFAULT_SETTINGS.dayStartTime;
+      const endTime =
+        typeof timeframe.endTime === "string"
+          ? timeframe.endTime.trim()
+          : DEFAULT_SETTINGS.workDayEndTime;
+
+      if (name.length === 0 || normalizedNames.has(name)) {
+        continue;
+      }
+
+      normalizedNames.add(name);
+      normalizedTimeframes.push({ name, startTime, endTime });
+    }
+
+    return normalizedTimeframes;
+  }
+
   private haveSameNormalizedTags(
     leftTags: string[],
     rightTags: string[],
@@ -2567,6 +2704,30 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       matchingWindows: scoredWindows.map((entry) => entry.window),
       matchScore: scoredWindows[0].score,
     };
+  }
+
+  private taskHasConfiguredTimeframeTag(task: ParsedTask): boolean {
+    const timeframeNames = new Set(
+      this.normalizeTimeframes(this.settings.timeframes).map(
+        (timeframe) => timeframe.name,
+      ),
+    );
+
+    return this.extractNormalizedTagsFromText(task.text).some((tag) =>
+      timeframeNames.has(tag),
+    );
+  }
+
+  private getPreferredTaskSchedulingConstraint(
+    task: ParsedTask,
+    manualBlockWindows: TaggedAvailabilityWindow[],
+    timeframeWindows: TaggedAvailabilityWindow[],
+  ): TaskSchedulingConstraint | null {
+    if (this.taskHasConfiguredTimeframeTag(task)) {
+      return this.getTaskSchedulingConstraint(task, timeframeWindows);
+    }
+
+    return this.getTaskSchedulingConstraint(task, manualBlockWindows);
   }
 
   private scheduleAutomaticTaskSegmentsWithinWindows(
@@ -2993,11 +3154,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }));
     const scheduledSegments: ScheduledTaskSegment[] = [];
     let remainingDurationMinutes = task.durationMinutes;
-    let nextProposedStartMinutes = proposedStartMinutes;
 
     while (remainingDurationMinutes > 0) {
       const availableWindow = this.findNextAvailableWindow(
-        nextProposedStartMinutes,
+        proposedStartMinutes,
         candidateOccupiedRanges,
         workDayEndMinutes,
       );
@@ -3006,8 +3166,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         break;
       }
 
+      const constrainedStartMinutes = Math.max(
+        availableWindow.startMinutes,
+        proposedStartMinutes,
+      );
+      const constrainedEndMinutes = Math.min(
+        availableWindow.endMinutes,
+        workDayEndMinutes,
+      );
       const availableDurationMinutes =
-        availableWindow.endMinutes - availableWindow.startMinutes;
+        constrainedEndMinutes - constrainedStartMinutes;
 
       if (availableDurationMinutes <= 0) {
         break;
@@ -3018,14 +3186,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         availableDurationMinutes,
       );
       const scheduledSegment: ScheduledTaskSegment = {
-        startMinutes: availableWindow.startMinutes,
-        endMinutes: availableWindow.startMinutes + scheduledDurationMinutes,
+        startMinutes: constrainedStartMinutes,
+        endMinutes: constrainedStartMinutes + scheduledDurationMinutes,
       };
 
       scheduledSegments.push(scheduledSegment);
       this.insertTimeRange(candidateOccupiedRanges, scheduledSegment);
       remainingDurationMinutes -= scheduledDurationMinutes;
-      nextProposedStartMinutes = scheduledSegment.endMinutes;
+      proposedStartMinutes = scheduledSegment.endMinutes;
     }
 
     if (scheduledSegments.length === 0) {
@@ -3366,294 +3534,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     };
   }
 
-  private expandNodeIcalEventOccurrencesForDay(
-    calendarEntry: any,
-    dayStart: Date,
-    dayEnd: Date,
-  ): Array<{ start: Date; end: Date }> {
-    const momentRuntime = this.momentRuntime;
-    const startDate =
-      calendarEntry.start instanceof Date
-        ? calendarEntry.start
-        : new Date(calendarEntry.start ?? Number.NaN);
-    const endDate =
-      calendarEntry.end instanceof Date
-        ? calendarEntry.end
-        : new Date(calendarEntry.end ?? Number.NaN);
-
-    if (
-      !Number.isFinite(startDate.getTime()) ||
-      !Number.isFinite(endDate.getTime())
-    ) {
-      return [];
-    }
-
-    if (calendarEntry.rrule?.between) {
-      const durationMilliseconds = Math.max(
-        endDate.getTime() - startDate.getTime(),
-        0,
-      );
-      const occurrenceStarts = calendarEntry.rrule.between(
-        dayStart,
-        new Date(dayEnd.getTime() + 24 * 60 * 60 * 1000),
-        true,
-      ) as Date[];
-      const occurrences: Array<{ start: Date; end: Date }> = [];
-
-      for (const occurrenceStart of occurrenceStarts) {
-        if (
-          momentRuntime &&
-          this.nodeIcalHasExcludedOccurrence(
-            calendarEntry,
-            occurrenceStart,
-            momentRuntime,
-          )
-        ) {
-          continue;
-        }
-
-        const overrideOccurrence = this.findNodeIcalOverrideOccurrence(
-          calendarEntry,
-          occurrenceStart,
-        );
-        if (overrideOccurrence) {
-          occurrences.push(overrideOccurrence);
-          continue;
-        }
-
-        const adjustedOccurrenceStart = this.adjustNodeIcalOccurrenceStart(
-          calendarEntry,
-          occurrenceStart,
-          momentRuntime,
-        );
-        occurrences.push({
-          start: adjustedOccurrenceStart,
-          end: new Date(
-            adjustedOccurrenceStart.getTime() + durationMilliseconds,
-          ),
-        });
-      }
-
-      return occurrences;
-    }
-
-    return [{ start: startDate, end: endDate }];
-  }
-
-  private nodeIcalHasExcludedOccurrence(
-    calendarEntry: any,
-    occurrenceStart: Date,
-    momentRuntime: {
-      moment: (value?: Date) => {
-        utcOffset: () => number;
-        clone: () => {
-          subtract: (amount: number, unit: string) => { toDate: () => Date };
-        };
-        isSame: (other: Date, unit: string) => boolean;
-        add: (amount: number, unit: string) => { toDate: () => Date };
-        toDate: () => Date;
-      };
-    },
-  ): boolean {
-    const exdates = Object.values(calendarEntry.exdate ?? {}) as any[];
-    return exdates.some((exceptionDateValue) => {
-      const exceptionDate =
-        exceptionDateValue instanceof Date
-          ? exceptionDateValue
-          : exceptionDateValue?.start instanceof Date
-            ? exceptionDateValue.start
-            : new Date(exceptionDateValue ?? Number.NaN);
-
-      if (!Number.isFinite(exceptionDate.getTime())) {
-        return false;
-      }
-
-      const occurrenceMoment = momentRuntime.moment(occurrenceStart);
-      const utcOffset = occurrenceMoment.utcOffset();
-      const occurrenceDateWithoutOffset = occurrenceMoment
-        .clone()
-        .subtract(utcOffset, "minutes");
-
-      return momentRuntime
-        .moment(exceptionDate)
-        .isSame(occurrenceDateWithoutOffset.toDate(), "day");
-    });
-  }
-
-  private adjustNodeIcalOccurrenceStart(
-    calendarEntry: any,
-    occurrenceStart: Date,
-    momentRuntime: {
-      moment: (value?: Date) => {
-        utcOffset: () => number;
-        clone: () => {
-          subtract: (amount: number, unit: string) => { toDate: () => Date };
-        };
-        isSame: (other: Date, unit: string) => boolean;
-        add: (amount: number, unit: string) => { toDate: () => Date };
-        toDate: () => Date;
-      };
-      tz: {
-        guess: () => string;
-        zone: (tzid: string) => {
-          utcOffset: (timestamp: number) => number;
-        } | null;
-      };
-    },
-  ): Date {
-    const tzid = calendarEntry.rrule?.origOptions?.tzid;
-    if (!tzid) {
-      return new Date(occurrenceStart);
-    }
-
-    let adjustedMoment = this.adjustForDst(
-      tzid,
-      calendarEntry.start instanceof Date
-        ? calendarEntry.start
-        : new Date(calendarEntry.start ?? occurrenceStart),
-      occurrenceStart,
-      momentRuntime,
-    );
-    adjustedMoment = this.adjustForOtherZones(
-      tzid,
-      adjustedMoment.toDate(),
-      momentRuntime,
-    );
-    return adjustedMoment.toDate();
-  }
-
-  private adjustForOtherZones(
-    tzid: string,
-    currentDate: Date,
-    momentRuntime: {
-      moment: (value?: Date) => {
-        utcOffset: () => number;
-        clone: () => {
-          subtract: (amount: number, unit: string) => { toDate: () => Date };
-        };
-        isSame: (other: Date, unit: string) => boolean;
-        add: (amount: number, unit: string) => { toDate: () => Date };
-        toDate: () => Date;
-      };
-      tz: {
-        guess: () => string;
-        zone: (tzid: string) => {
-          utcOffset: (timestamp: number) => number;
-        } | null;
-      };
-    },
-  ) {
-    const localTzid = momentRuntime.tz.guess();
-
-    if (tzid === localTzid) {
-      return momentRuntime.moment(currentDate);
-    }
-
-    const localTimezone = momentRuntime.tz.zone(localTzid);
-    const originalTimezone = momentRuntime.tz.zone(tzid);
-
-    if (!localTimezone || !originalTimezone) {
-      return momentRuntime.moment(currentDate);
-    }
-
-    const offset =
-      localTimezone.utcOffset(currentDate.getTime()) -
-      originalTimezone.utcOffset(currentDate.getTime());
-
-    return momentRuntime.moment(currentDate).add(offset, "minutes");
-  }
-
-  private adjustForDst(
-    tzid: string,
-    originalDate: Date,
-    currentDate: Date,
-    momentRuntime: {
-      moment: (value?: Date) => {
-        utcOffset: () => number;
-        clone: () => {
-          subtract: (amount: number, unit: string) => { toDate: () => Date };
-        };
-        isSame: (other: Date, unit: string) => boolean;
-        add: (amount: number, unit: string) => { toDate: () => Date };
-        toDate: () => Date;
-      };
-      tz: {
-        guess: () => string;
-        zone: (tzid: string) => {
-          utcOffset: (timestamp: number) => number;
-        } | null;
-      };
-    },
-  ) {
-    const timezone = momentRuntime.tz.zone(tzid);
-
-    if (!timezone) {
-      return momentRuntime.moment(currentDate);
-    }
-
-    const offset =
-      timezone.utcOffset(currentDate.getTime()) -
-      timezone.utcOffset(originalDate.getTime());
-
-    return momentRuntime.moment(currentDate).add(offset, "minutes");
-  }
-
-  private findNodeIcalOverrideOccurrence(
-    calendarEntry: any,
-    occurrenceStart: Date,
-  ): { start: Date; end: Date } | null {
-    const recurrenceOverrides = Object.values(
-      calendarEntry.recurrences ?? {},
-    ) as any[];
-    for (const recurrenceOverride of recurrenceOverrides) {
-      const overrideStart =
-        recurrenceOverride?.start instanceof Date
-          ? recurrenceOverride.start
-          : new Date(recurrenceOverride?.start ?? Number.NaN);
-      const overrideEnd =
-        recurrenceOverride?.end instanceof Date
-          ? recurrenceOverride.end
-          : new Date(recurrenceOverride?.end ?? Number.NaN);
-
-      if (
-        Number.isFinite(overrideStart.getTime()) &&
-        Number.isFinite(overrideEnd.getTime()) &&
-        overrideStart.getTime() === occurrenceStart.getTime()
-      ) {
-        return {
-          start: overrideStart,
-          end: overrideEnd,
-        };
-      }
-    }
-
-    return null;
-  }
-
-  private buildCalendarEventDiagnostic(
-    summary: string,
-    uid: string,
-    startDate: Date,
-    endDate: Date,
-    recurrenceRule: string | null,
-    included: boolean,
-    reason: string,
-  ): CalendarEventDiagnostic {
-    return {
-      summary,
-      uid,
-      startText: Number.isFinite(startDate.getTime())
-        ? startDate.toLocaleString()
-        : "Invalid start",
-      endText: Number.isFinite(endDate.getTime())
-        ? endDate.toLocaleString()
-        : "Invalid end",
-      recurrenceRule,
-      included,
-      reason,
-    };
-  }
-
   private normalizeCalendarBusyRanges(
     ranges: CalendarBusyRange[],
   ): CalendarBusyRange[] {
@@ -3661,7 +3541,8 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       this.getValidatedMeetingBufferBeforeMinutes();
     const meetingBufferAfterMinutes =
       this.getValidatedMeetingBufferAfterMinutes();
-    const sortedRanges = ranges
+
+    const bufferedRanges = ranges
       .map((range) => ({
         ...range,
         startMinutes: Math.max(
@@ -3678,12 +3559,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         (leftRange, rightRange) =>
           leftRange.startMinutes - rightRange.startMinutes,
       );
-    const mergedRanges: CalendarBusyRange[] = [];
 
-    for (const range of sortedRanges) {
-      const previousRange = mergedRanges[mergedRanges.length - 1];
+    const normalizedRanges: CalendarBusyRange[] = [];
+    for (const range of bufferedRanges) {
+      const previousRange = normalizedRanges[normalizedRanges.length - 1];
       if (!previousRange || range.startMinutes > previousRange.endMinutes) {
-        mergedRanges.push({ ...range });
+        normalizedRanges.push({ ...range });
         continue;
       }
 
@@ -3691,9 +3572,91 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         previousRange.endMinutes,
         range.endMinutes,
       );
+      if (previousRange.summary.length === 0) {
+        previousRange.summary = range.summary;
+      }
+      if (previousRange.uid.length === 0) {
+        previousRange.uid = range.uid;
+      }
     }
 
-    return mergedRanges;
+    return normalizedRanges;
+  }
+
+  private buildCalendarEventDiagnostic(
+    summary: string,
+    uid: string,
+    startDate: Date,
+    endDate: Date,
+    recurrenceRule: string | null,
+    included: boolean,
+    reason: string,
+  ): CalendarEventDiagnostic {
+    const formatDiagnosticDate = (value: Date): string =>
+      Number.isFinite(value.getTime()) ? value.toISOString() : "Invalid date";
+
+    return {
+      summary,
+      uid,
+      startText: formatDiagnosticDate(startDate),
+      endText: formatDiagnosticDate(endDate),
+      recurrenceRule,
+      included,
+      reason,
+    };
+  }
+
+  private expandNodeIcalEventOccurrencesForDay(
+    calendarEntry: {
+      start?: Date;
+      end?: Date;
+      rrule?: { toString?: () => string };
+      recurrences?: Record<string, { start?: Date; end?: Date }>;
+      exdate?: Record<string, unknown>;
+      recurrenceid?: Date;
+      recurrenceId?: Date;
+      uid?: string;
+      summary?: string;
+    },
+    dayStart: Date,
+    dayEnd: Date,
+  ): Array<{ start: Date; end: Date }> {
+    const startDate =
+      calendarEntry.start instanceof Date
+        ? calendarEntry.start
+        : new Date(Number.NaN);
+    const endDate =
+      calendarEntry.end instanceof Date
+        ? calendarEntry.end
+        : new Date(Number.NaN);
+
+    if (
+      !Number.isFinite(startDate.getTime()) ||
+      !Number.isFinite(endDate.getTime())
+    ) {
+      return [];
+    }
+
+    const recurrenceId =
+      calendarEntry.recurrenceId instanceof Date
+        ? calendarEntry.recurrenceId
+        : calendarEntry.recurrenceid instanceof Date
+          ? calendarEntry.recurrenceid
+          : null;
+
+    const event: ParsedIcsEvent = {
+      uid: String(calendarEntry.uid ?? ""),
+      summary: String(calendarEntry.summary ?? "Untitled event"),
+      start: startDate,
+      end: endDate,
+      recurrenceRule: calendarEntry.rrule?.toString?.() ?? null,
+      recurrenceId,
+      exceptionDates: Object.values(calendarEntry.exdate ?? {})
+        .map((value) => (value instanceof Date ? value : new Date(Number.NaN)))
+        .filter((value) => Number.isFinite(value.getTime())),
+    };
+
+    return this.expandEventOccurrencesForDay(event, dayStart, dayEnd);
   }
 
   private parseIcsEvents(rawCalendar: string): ParsedIcsEvent[] {
@@ -3826,6 +3789,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private decodeIcsText(value: string): string {
     return value
       .replace(/\\n/gi, "\n")
+      .replace(/\r\n/gi, "\n")
+      .replace(/\r/gi, "\n")
+      .replace(/\n[ \t]/gi, "")
       .replace(/\\,/g, ",")
       .replace(/\\;/g, ";")
       .replace(/\\\\/g, "\\");
@@ -4117,7 +4083,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       /^(\s*[-*]\s+)\[(?: |\/|>)\](\s+.*)$/,
       "$1[x]$2",
     );
-    return /(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?(?=\s|$)/.test(updatedLine)
+    return /(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?/.test(updatedLine)
       ? updatedLine
       : `${updatedLine} ${completedDateMarker}`;
   }
@@ -4133,7 +4099,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     const normalizedTaskBody = reopenedMatch[2]
-      .replace(/(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?(?=\s|$)/g, "")
+      .replace(/(^|\s)✅\s*`?\d{4}-\d{2}-\d{2}`?/g, "")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -4380,6 +4346,56 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
   constructor(app: App, plugin: ObsidianAutomaticTimeBlocking) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+
+  private async saveTimeframeRow(
+    index: number,
+    partialTimeframe: Partial<TimeframeDefinition>,
+  ): Promise<void> {
+    const existingTimeframe = this.plugin.settings.timeframes[index];
+    if (!existingTimeframe) {
+      return;
+    }
+
+    this.plugin.settings.timeframes[index] = {
+      ...existingTimeframe,
+      ...partialTimeframe,
+    };
+    this.plugin.settings.timeframes = this.normalizeTimeframesForDisplay(
+      this.plugin.settings.timeframes,
+    );
+    await this.plugin.saveSettings();
+    this.display();
+  }
+
+  private normalizeTimeframesForDisplay(
+    timeframes: TimeframeDefinition[] | undefined,
+  ): TimeframeDefinition[] {
+    if (!Array.isArray(timeframes)) {
+      return [];
+    }
+
+    const normalizedNames = new Set<string>();
+    const normalizedTimeframes: TimeframeDefinition[] = [];
+    for (const timeframe of timeframes) {
+      if (!timeframe) {
+        continue;
+      }
+
+      const name = timeframe.name.trim().toLowerCase();
+      if (name.length === 0 || normalizedNames.has(name)) {
+        continue;
+      }
+
+      normalizedNames.add(name);
+      normalizedTimeframes.push({
+        name,
+        startTime: timeframe.startTime.trim(),
+        endTime: timeframe.endTime.trim(),
+      });
+    }
+
+    return normalizedTimeframes;
   }
 
   display(): void {
@@ -4667,6 +4683,86 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
                 : DEFAULT_SETTINGS.breakDurationMinutes;
             await this.plugin.saveSettings();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Timeframes")
+      .setDesc(
+        "Create reusable parts of day like morning or afternoon. Tasks tagged with matching hashtags such as `#morning` will prefer those windows before falling back to normal scheduling.",
+      );
+
+    if (this.plugin.settings.timeframes.length === 0) {
+      containerEl.createEl("p", {
+        text: "No timeframes defined yet.",
+      });
+    }
+
+    this.plugin.settings.timeframes.forEach((timeframe, index) => {
+      new Setting(containerEl)
+        .setName(`Timeframe ${index + 1}`)
+        .setDesc(`Matches tasks tagged with #${timeframe.name}.`)
+        .addText((text) =>
+          text
+            .setPlaceholder("morning")
+            .setValue(timeframe.name)
+            .onChange(async (value) => {
+              await this.saveTimeframeRow(index, {
+                name: value.trim().toLowerCase(),
+              });
+            }),
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("08:30")
+            .setValue(timeframe.startTime)
+            .onChange(async (value) => {
+              await this.saveTimeframeRow(index, {
+                startTime: value.trim(),
+              });
+            }),
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("12:00")
+            .setValue(timeframe.endTime)
+            .onChange(async (value) => {
+              await this.saveTimeframeRow(index, {
+                endTime: value.trim(),
+              });
+            }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("trash")
+            .setTooltip("Remove timeframe")
+            .onClick(async () => {
+              this.plugin.settings.timeframes.splice(index, 1);
+              this.plugin.settings.timeframes =
+                this.normalizeTimeframesForDisplay(
+                  this.plugin.settings.timeframes,
+                );
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+    });
+
+    new Setting(containerEl)
+      .setName("Add timeframe")
+      .setDesc("Add another reusable part-of-day window.")
+      .addButton((button) =>
+        button.setButtonText("Add timeframe").onClick(async () => {
+          this.plugin.settings.timeframes.push({
+            name: `timeframe-${this.plugin.settings.timeframes.length + 1}`,
+            startTime: DEFAULT_SETTINGS.dayStartTime,
+            endTime: DEFAULT_SETTINGS.workDayEndTime,
+          });
+          this.plugin.settings.timeframes = this.normalizeTimeframesForDisplay(
+            this.plugin.settings.timeframes,
+          );
+          await this.plugin.saveSettings();
+          this.display();
+        }),
       );
 
     new Setting(containerEl)

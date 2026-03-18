@@ -86,6 +86,25 @@ How it works:
 - stronger tag matches are preferred first
 - the rest of the day still schedules normally inside your global workday bounds
 
+## Timeframes
+
+Timeframes let you create reusable parts of the day without writing manual block bullets into each note.
+
+Example:
+
+```md
+- [ ] Write status update #morning
+- [ ] Admin catch-up #afternoon
+- [ ] Read before bed #late
+```
+
+How it works:
+
+- define timeframes like `morning` or `afternoon` in plugin settings
+- tasks tagged with matching hashtags like `#morning` prefer those windows first
+- if a matching timeframe has no room, the task falls back to normal scheduling
+- manual time block bullets still work and combine with timeframe-based preferences
+
 Read the full guide here:
 
 - [`docs/manual-time-blocks.md`](docs/manual-time-blocks.md)
@@ -105,6 +124,7 @@ Read the full guide here:
 ## Good To Know
 
 - tasks use hashtags like `#work` for matching
+- timeframe names are matched through hashtags like `#morning`
 - manual block bullets can use plain words like `work` or hashtags like `#work`
 - manually timed tasks still behave like explicit placements
 - generated planner output is treated as plugin output on reruns
