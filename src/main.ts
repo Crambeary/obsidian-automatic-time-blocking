@@ -1748,7 +1748,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private extractTasksDateTokens(taskText: string): string[] {
     const matchedTokens = new Set<string>();
     const tokenPatterns = [
-      /[📅⏳🛫]\s*(\d{4}-\d{2}-\d{2})/g,
+      /(?:📅|⏳|🛫|✅|❌|➕)\s*(\d{4}-\d{2}-\d{2})/gu,
       /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g,
     ];
 
@@ -1901,24 +1901,27 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
-      /(^|\s)(?:([📅⏳🛫]\uFE0F?)\s*`?(\d{4}-\d{2}-\d{2})`?|(>)`?(\d{4}-\d{2}-\d{2})`?)(?=\s|$)/g,
+      /(?:^|\s|(?<=\S))((?:📅|⏳|🛫|✅|❌|➕)\uFE0F?)\s*`?(\d{4}-\d{2}-\d{2})`?|(?:^|\s)(>)`?(\d{4}-\d{2}-\d{2})`?(?=\s|$)/gu,
       (
-        _,
-        leadingWhitespace: string,
+        match,
         emojiMarker?: string,
         emojiDate?: string,
         plainMarker?: string,
         plainDate?: string,
       ) => {
         if (emojiMarker && emojiDate) {
-          return `${leadingWhitespace}\`${emojiMarker} ${emojiDate}\``;
+          const prefix =
+            match.startsWith(" ") || match.startsWith("\t") ? match[0] : "";
+          return `${prefix}${emojiMarker} \`${emojiDate}\``;
         }
 
         if (plainMarker && plainDate) {
-          return `${leadingWhitespace}\`${plainMarker}${plainDate}\``;
+          const prefix =
+            match.startsWith(" ") || match.startsWith("\t") ? match[0] : "";
+          return `${prefix}\`${plainMarker}${plainDate}\``;
         }
 
-        return _;
+        return match;
       },
     );
   }
