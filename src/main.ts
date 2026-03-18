@@ -1754,7 +1754,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private extractTasksDateTokens(taskText: string): string[] {
     const matchedTokens = new Set<string>();
     const tokenPatterns = [
-      /(?:📅|⏳|🛫|✅|❌|➕)\s*(\d{4}-\d{2}-\d{2})/gu,
+      /(?:📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/gu,
       /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g,
     ];
 
@@ -1907,7 +1907,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
-      /(?:^|\s|(?<=\S))((?:📅|⏳|🛫|✅|❌|➕)\uFE0F?)\s*`?(\d{4}-\d{2}-\d{2})`?|(?:^|\s)(>)`?(\d{4}-\d{2}-\d{2})`?(?=\s|$)/gu,
+      /(?:^|\s|(?<=\S))((?:📅|⏳|🛫)\uFE0F?)\s*`?(\d{4}-\d{2}-\d{2})`?|(?:^|\s)(>)`?(\d{4}-\d{2}-\d{2})`?(?=\s|$)/gu,
       (
         match,
         emojiMarker?: string,
