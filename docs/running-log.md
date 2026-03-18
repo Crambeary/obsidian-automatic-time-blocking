@@ -22,6 +22,19 @@ The plugin currently supports:
 - bidirectional completion sync between generated planner tasks and source tasks
 - same-note directional completion sync support
 - in-memory debug logging
+- task filtering with include and exclude patterns supporting plain text and regex
+
+## Task Filtering
+
+Recent additions:
+
+- include task filter setting accepts comma-separated patterns
+- exclude task filter setting accepts comma-separated patterns
+- patterns support plain text matching anywhere in task text
+- patterns support regex format like `/^pattern/` for advanced matching
+- exclude filters are applied first, then include filters
+- empty include filter means all non-excluded tasks are included
+- filter logic is applied after task collection and before priority sorting
 
 ## Manual Time Blocks
 

@@ -118,6 +118,8 @@ interface ObsidianAutomaticTimeBlockingSettings {
   includeInProgressTasks: boolean;
   includeRescheduledTasks: boolean;
   enableCompletionSync: boolean;
+  includeTasksWithText: string;
+  excludeTasksWithText: string;
 }
 
 const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
@@ -141,6 +143,8 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   includeInProgressTasks: true,
   includeRescheduledTasks: true,
   enableCompletionSync: true,
+  includeTasksWithText: "",
+  excludeTasksWithText: "",
 };
 
 interface LegacyObsidianAutomaticTimeBlockingSettings extends Partial<ObsidianAutomaticTimeBlockingSettings> {
@@ -1186,7 +1190,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       externalTasks.push(...sourceTasks);
     }
 
-    const tasks = [...activeNoteTasks, ...externalTasks].sort(
+    const allTasks = [...activeNoteTasks, ...externalTasks];
+    const filteredTasks = this.applyTaskFilters(allTasks);
+    const tasks = filteredTasks.sort(
       (leftTask, rightTask) =>
         this.getTaskPriorityRank(rightTask.priority) -
         this.getTaskPriorityRank(leftTask.priority),
@@ -1197,6 +1203,73 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       externalSourceFileCount: externalSourceFiles.length,
       usedDataviewIndex: externalTaskDiscovery.usedDataviewIndex,
     };
+  }
+
+  private applyTaskFilters(tasks: ParsedTask[]): ParsedTask[] {
+    const includePatterns = this.parseFilterPatterns(
+      this.settings.includeTasksWithText,
+    );
+    const excludePatterns = this.parseFilterPatterns(
+      this.settings.excludeTasksWithText,
+    );
+
+    return tasks.filter((task) => {
+      if (excludePatterns.length > 0) {
+        if (this.taskMatchesAnyPattern(task.text, excludePatterns)) {
+          return false;
+        }
+      }
+
+      if (includePatterns.length > 0) {
+        return this.taskMatchesAnyPattern(task.text, includePatterns);
+      }
+
+      return true;
+    });
+  }
+
+  private parseFilterPatterns(filterText: string): Array<string | RegExp> {
+    if (!filterText || filterText.trim().length === 0) {
+      return [];
+    }
+
+    const patterns: Array<string | RegExp> = [];
+    const rawPatterns = filterText
+      .split(",")
+      .map((pattern) => pattern.trim())
+      .filter((pattern) => pattern.length > 0);
+
+    for (const rawPattern of rawPatterns) {
+      if (rawPattern.startsWith("/") && rawPattern.length > 1) {
+        const regexMatch = rawPattern.match(/^\/(.+?)\/([gimuy]*)$/);
+        if (regexMatch) {
+          try {
+            patterns.push(new RegExp(regexMatch[1], regexMatch[2]));
+          } catch {
+            patterns.push(rawPattern);
+          }
+        } else {
+          patterns.push(rawPattern);
+        }
+      } else {
+        patterns.push(rawPattern);
+      }
+    }
+
+    return patterns;
+  }
+
+  private taskMatchesAnyPattern(
+    taskText: string,
+    patterns: Array<string | RegExp>,
+  ): boolean {
+    return patterns.some((pattern) => {
+      if (typeof pattern === "string") {
+        return taskText.includes(pattern);
+      } else {
+        return pattern.test(taskText);
+      }
+    });
   }
 
   private getExternalTaskDiscovery(
@@ -4633,6 +4706,42 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName("Include tasks matching text")
+      .setDesc(
+        "Optional. Only include tasks containing one of these patterns. Separate patterns with commas. Leave empty to include all tasks. Examples: '#work,#urgent' includes tasks with #work OR #urgent. Supports regex like '/^f/' for tasks starting with 'f'.",
+      )
+      .addTextArea((textArea) => {
+        textArea
+          .setPlaceholder("#work,#urgent,/^important/")
+          .setValue(this.plugin.settings.includeTasksWithText)
+          .onChange(async (value) => {
+            this.plugin.settings.includeTasksWithText = value;
+            await this.plugin.saveSettings();
+          });
+
+        textArea.inputEl.rows = 3;
+        textArea.inputEl.cols = 40;
+      });
+
+    new Setting(containerEl)
+      .setName("Exclude tasks matching text")
+      .setDesc(
+        "Optional. Exclude tasks containing one of these patterns. Separate patterns with commas. Examples: '#someday,#backlog,#waiting' excludes tasks with any of these tags. Supports regex patterns.",
+      )
+      .addTextArea((textArea) => {
+        textArea
+          .setPlaceholder("#someday,#backlog,#waiting")
+          .setValue(this.plugin.settings.excludeTasksWithText)
+          .onChange(async (value) => {
+            this.plugin.settings.excludeTasksWithText = value;
+            await this.plugin.saveSettings();
+          });
+
+        textArea.inputEl.rows = 3;
+        textArea.inputEl.cols = 40;
+      });
 
     containerEl.createEl("h3", { text: "Task discovery" });
 

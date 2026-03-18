@@ -30,6 +30,40 @@ Example:
 - [ ] Quick admin
 ```
 
+## Task Filtering
+
+Control which tasks get time-blocked by setting include or exclude patterns.
+
+Examples:
+
+**Include only work tasks:**
+
+```
+Include: #work,#urgent
+```
+
+**Exclude backlog items:**
+
+```
+Exclude: #someday,#backlog,#waiting
+```
+
+**Advanced regex patterns:**
+
+```
+Include: /^important/,#focus
+Exclude: /\[low priority\]/
+```
+
+How it works:
+
+- exclude patterns are checked first and remove matching tasks
+- include patterns then select which remaining tasks to schedule
+- leave include empty to schedule all non-excluded tasks
+- patterns match anywhere in task text
+- separate multiple patterns with commas
+- wrap regex in `/pattern/` format
+
 ## Manual Time Blocks
 
 Manual time blocks let you guide where tagged tasks prefer to land.
@@ -66,6 +100,7 @@ Read the full guide here:
 - support Dataview-backed external task discovery when Dataview is installed
 - support remote calendar busy-time avoidance
 - support completion sync between generated planner tasks and source tasks
+- support task filtering with include and exclude patterns using plain text or regex
 
 ## Good To Know
 
