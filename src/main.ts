@@ -1901,7 +1901,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
   private escapePlannerDateTokens(taskText: string): string {
     return taskText.replace(
-      /(^|\s)(?:([📅⏳🛫])\s*(\d{4}-\d{2}-\d{2})|(>)(\d{4}-\d{2}-\d{2}))(?=\s|$)/g,
+      /(^|\s)(?:([📅⏳🛫]\uFE0F?)\s*`?(\d{4}-\d{2}-\d{2})`?|(>)`?(\d{4}-\d{2}-\d{2})`?)(?=\s|$)/g,
       (
         _,
         leadingWhitespace: string,
@@ -1911,7 +1911,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         plainDate?: string,
       ) => {
         if (emojiMarker && emojiDate) {
-          return `${leadingWhitespace}${emojiMarker} \`${emojiDate}\``;
+          return `${leadingWhitespace}\`${emojiMarker} ${emojiDate}\``;
         }
 
         if (plainMarker && plainDate) {
@@ -1968,19 +1968,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     for (const task of manuallyTimedTasks) {
       const manualStartMinutes = task.manualStartMinutes ?? 0;
       const endMinutes = manualStartMinutes + task.durationMinutes;
-      if (
-        manualStartMinutes < configuredDayStartMinutes ||
-        manualStartMinutes >= workDayEndMinutes ||
-        endMinutes > workDayEndMinutes ||
-        this.timeRangeOverlaps(
-          { startMinutes: manualStartMinutes, endMinutes },
-          occupiedRanges,
-        )
-      ) {
-        skippedTaskCount += 1;
-        unscheduledLines.push(...this.buildRenderedTaskLines(task));
-        continue;
-      }
 
       scheduledTaskCount += 1;
       scheduledTaskEntries.push({
@@ -1994,20 +1981,72 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         startMinutes: manualStartMinutes,
         endMinutes: endMinutes + breakDurationMinutes,
       });
+
+      if (
+        manualStartMinutes < configuredDayStartMinutes ||
+        manualStartMinutes >= workDayEndMinutes ||
+        endMinutes > workDayEndMinutes ||
+        this.timeRangeOverlaps(
+          { startMinutes: manualStartMinutes, endMinutes },
+          busyRanges,
+        )
+      ) {
+        this.appendDebugLog(
+          `Forced explicit task placement at ${this.formatMinutesAsTime(manualStartMinutes)}-${this.formatMinutesAsTime(endMinutes)} despite workday or busy-range conflicts: ${task.text}`,
+        );
+      }
     }
 
-    const taggedAutomaticTasks = automaticTasks.filter(
-      (task) => this.extractNormalizedTagsFromText(task.text).length > 0,
-    );
+    const taskSchedulingConstraints = new Map<
+      ParsedTask,
+      TaskSchedulingConstraint
+    >();
+    const taggedAutomaticTasks = automaticTasks
+      .filter(
+        (task) => this.extractNormalizedTagsFromText(task.text).length > 0,
+      )
+      .sort((leftTask, rightTask) => {
+        const priorityRankDifference =
+          this.getTaskPriorityRank(rightTask.priority) -
+          this.getTaskPriorityRank(leftTask.priority);
+        if (priorityRankDifference !== 0) {
+          return priorityRankDifference;
+        }
+
+        const leftConstraint = this.getTaskSchedulingConstraint(
+          leftTask,
+          manualBlockWindows,
+        );
+        const rightConstraint = this.getTaskSchedulingConstraint(
+          rightTask,
+          manualBlockWindows,
+        );
+
+        if (leftConstraint) {
+          taskSchedulingConstraints.set(leftTask, leftConstraint);
+        }
+
+        if (rightConstraint) {
+          taskSchedulingConstraints.set(rightTask, rightConstraint);
+        }
+
+        const specificityDifference =
+          (rightConstraint?.matchScore ?? 0) -
+          (leftConstraint?.matchScore ?? 0);
+        if (specificityDifference !== 0) {
+          return specificityDifference;
+        }
+
+        return 0;
+      });
     const untaggedAutomaticTasks = automaticTasks.filter(
       (task) => this.extractNormalizedTagsFromText(task.text).length === 0,
     );
 
     for (const task of [...taggedAutomaticTasks, ...untaggedAutomaticTasks]) {
-      const schedulingConstraint = this.getTaskSchedulingConstraint(
-        task,
-        manualBlockWindows,
-      );
+      const schedulingConstraint =
+        taskSchedulingConstraints.get(task) ??
+        this.getTaskSchedulingConstraint(task, manualBlockWindows);
       const schedulingStartMinutes = schedulingConstraint
         ? this.getInitialStartMinutes(planningDate)
         : currentAutomaticStartMinutes;
@@ -2298,7 +2337,16 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     const bareWordMatches = blockText.match(/[A-Za-z0-9][\w/-]*/g) ?? [];
-    return this.normalizeTagList(bareWordMatches);
+    const normalizedPhraseTag = bareWordMatches
+      .map((part) => part.trim().toLowerCase())
+      .filter((part) => part.length > 0)
+      .join("-");
+
+    return this.normalizeTagList(
+      normalizedPhraseTag.length > 0
+        ? [...bareWordMatches, normalizedPhraseTag]
+        : bareWordMatches,
+    );
   }
 
   private extractNormalizedTagsFromText(taskText: string): string[] {
