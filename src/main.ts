@@ -180,6 +180,13 @@ interface ParsedTask {
   subtasks: ParsedTask[];
 }
 
+type TaskDateTokenKind = "scheduled" | "due" | "start";
+
+interface TaskDateToken {
+  kind: TaskDateTokenKind;
+  date: string;
+}
+
 interface PlannerTaskReference {
   sourcePath: string;
   sourceFingerprint: string;
@@ -1189,7 +1196,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       activeFile.path,
       selectedTaskStatuses,
     ).filter((task) => {
-      const dateTokens = this.extractTasksDateTokens(task.text);
+      const dateTokens = this.extractTaskDateTokens(task.text);
       if (dateTokens.length === 0) {
         return true;
       }
@@ -1829,7 +1836,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     taskText: string,
     planningDate: Date,
   ): boolean {
-    const dateTokens = this.extractTasksDateTokens(taskText);
+    const dateTokens = this.extractTaskDateTokens(taskText);
     if (dateTokens.length === 0) {
       return false;
     }
@@ -1839,34 +1846,62 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       planningDate.getMonth(),
       planningDate.getDate(),
     );
-    return dateTokens.some((dateToken) => {
-      const tokenDate = this.parseDateKey(dateToken);
-      return (
-        tokenDate !== null && tokenDate.getTime() <= planningDateStart.getTime()
+    const datedTokens = dateTokens
+      .map((dateToken) => ({
+        kind: dateToken.kind,
+        date: this.parseDateKey(dateToken.date),
+      }))
+      .filter(
+        (dateToken): dateToken is { kind: TaskDateTokenKind; date: Date } =>
+          dateToken.date !== null,
       );
-    });
+
+    if (datedTokens.length === 0) {
+      return false;
+    }
+
+    const scheduledOrDueTokens = datedTokens.filter(
+      (dateToken) => dateToken.kind === "scheduled" || dateToken.kind === "due",
+    );
+
+    if (scheduledOrDueTokens.length > 0) {
+      return scheduledOrDueTokens.some(
+        (dateToken) => dateToken.date.getTime() <= planningDateStart.getTime(),
+      );
+    }
+
+    return datedTokens.some(
+      (dateToken) =>
+        dateToken.kind === "start" &&
+        dateToken.date.getTime() <= planningDateStart.getTime(),
+    );
   }
 
-  private extractTasksDateTokens(taskText: string): string[] {
-    const matchedTokens = new Set<string>();
-    const tokenPatterns = [
-      /(?:📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/gu,
-      /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g,
+  private extractTaskDateTokens(taskText: string): TaskDateToken[] {
+    const matchedTokens = new Map<string, TaskDateToken>();
+    const tokenPatterns: Array<{ kind: TaskDateTokenKind; pattern: RegExp }> = [
+      { kind: "scheduled", pattern: /📅\s*(\d{4}-\d{2}-\d{2})/gu },
+      { kind: "due", pattern: /⏳\s*(\d{4}-\d{2}-\d{2})/gu },
+      { kind: "start", pattern: /🛫\s*(\d{4}-\d{2}-\d{2})/gu },
+      { kind: "scheduled", pattern: /(?:^|\s)>(\d{4}-\d{2}-\d{2})(?=\s|$)/g },
     ];
 
     for (const tokenPattern of tokenPatterns) {
-      let match = tokenPattern.exec(taskText);
+      let match = tokenPattern.pattern.exec(taskText);
       while (match) {
         const normalizedDate = this.normalizeIsoDateToken(match[1]);
         if (normalizedDate) {
-          matchedTokens.add(normalizedDate);
+          matchedTokens.set(`${tokenPattern.kind}:${normalizedDate}`, {
+            kind: tokenPattern.kind,
+            date: normalizedDate,
+          });
         }
 
-        match = tokenPattern.exec(taskText);
+        match = tokenPattern.pattern.exec(taskText);
       }
     }
 
-    return [...matchedTokens];
+    return [...matchedTokens.values()];
   }
 
   private normalizeIsoDateToken(value: string): string | null {
