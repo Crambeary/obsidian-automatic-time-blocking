@@ -1114,7 +1114,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     const { busyRanges, failedCalendarCount } =
-      await this.getCalendarPreviewData(planningDate, false);
+      await this.getCalendarPreviewData(planningDate, true);
+    this.appendDebugLog(
+      `Busy calendar ranges used for scheduling on ${this.formatDateKey(planningDate)}: ${busyRanges.length === 0 ? "none" : busyRanges.map((range) => `${this.formatMinutesAsTime(range.startMinutes)}-${this.formatMinutesAsTime(range.endMinutes)} ${"summary" in range && typeof range.summary === "string" && range.summary.length > 0 ? range.summary : ""}`.trim()).join("; ")}`,
+    );
     const manualBlocks = this.extractManualBlockDefinitions(content);
     this.appendDebugLog(
       `Manual blocks detected for ${view.file.path}: ${manualBlocks.length === 0 ? "none" : manualBlocks.map((block) => `${this.formatMinutesAsTime(block.startMinutes)}-${this.formatMinutesAsTime(block.endMinutes)} [${block.tags.join(", ")}]`).join("; ")}`,
@@ -3442,7 +3445,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     const nodeIcal = await this.loadNodeIcal();
-    await this.loadMomentRuntime();
     const calendarEntries = Object.values(
       nodeIcal.parseICS(rawCalendar) as Record<string, any>,
     );
@@ -3645,7 +3647,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     calendarEntry: {
       start?: Date;
       end?: Date;
-      rrule?: { toString?: () => string };
+      rrule?: {
+        toString?: () => string;
+        between?: (after: Date, before: Date, inclusive?: boolean) => Date[];
+      };
       recurrences?: Record<string, { start?: Date; end?: Date }>;
       exdate?: Record<string, unknown>;
       recurrenceid?: Date;
@@ -3672,12 +3677,107 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       return [];
     }
 
+    const eventDuration = endDate.getTime() - startDate.getTime();
+    if (eventDuration <= 0) {
+      return [];
+    }
+
     const recurrenceId =
       calendarEntry.recurrenceId instanceof Date
         ? calendarEntry.recurrenceId
         : calendarEntry.recurrenceid instanceof Date
           ? calendarEntry.recurrenceid
           : null;
+
+    if (recurrenceId) {
+      return [{ start: startDate, end: endDate }];
+    }
+
+    const recurrenceOverrideOccurrences =
+      this.getNodeIcalRecurrenceOverridesForDay(
+        calendarEntry.recurrences,
+        dayStart,
+        dayEnd,
+      );
+
+    if (calendarEntry.rrule?.between) {
+      const searchStart = new Date(dayStart.getTime() - eventDuration);
+      const occurrenceStarts = calendarEntry.rrule.between(
+        searchStart,
+        dayEnd,
+        true,
+      );
+      const expandedOccurrences: Array<{ start: Date; end: Date }> = [
+        ...recurrenceOverrideOccurrences,
+      ];
+
+      for (const occurrenceStart of occurrenceStarts) {
+        if (!(occurrenceStart instanceof Date)) {
+          continue;
+        }
+
+        const overriddenOccurrence = this.findNodeIcalRecurrenceOverride(
+          calendarEntry.recurrences,
+          occurrenceStart,
+        );
+
+        const normalizedOccurrenceStart =
+          this.normalizeRecurringOccurrenceStart(occurrenceStart, startDate);
+        const resolvedStart =
+          overriddenOccurrence?.start instanceof Date
+            ? overriddenOccurrence.start
+            : normalizedOccurrenceStart;
+        const resolvedEnd =
+          overriddenOccurrence?.end instanceof Date
+            ? overriddenOccurrence.end
+            : new Date(resolvedStart.getTime() + eventDuration);
+
+        if (
+          !Number.isFinite(resolvedStart.getTime()) ||
+          !Number.isFinite(resolvedEnd.getTime()) ||
+          resolvedEnd.getTime() <= resolvedStart.getTime()
+        ) {
+          continue;
+        }
+
+        if (
+          this.isNodeIcalOccurrenceExcluded(
+            calendarEntry.exdate,
+            occurrenceStart,
+            resolvedStart,
+          )
+        ) {
+          continue;
+        }
+
+        if (resolvedEnd <= dayStart || resolvedStart >= dayEnd) {
+          continue;
+        }
+
+        if (
+          expandedOccurrences.some(
+            (existingOccurrence) =>
+              existingOccurrence.start.getTime() === resolvedStart.getTime() &&
+              existingOccurrence.end.getTime() === resolvedEnd.getTime(),
+          )
+        ) {
+          continue;
+        }
+
+        expandedOccurrences.push({
+          start: resolvedStart,
+          end: resolvedEnd,
+        });
+      }
+
+      if (expandedOccurrences.length > 0) {
+        return expandedOccurrences;
+      }
+    }
+
+    if (recurrenceOverrideOccurrences.length > 0) {
+      return recurrenceOverrideOccurrences;
+    }
 
     const event: ParsedIcsEvent = {
       uid: String(calendarEntry.uid ?? ""),
@@ -3692,6 +3792,109 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     };
 
     return this.expandEventOccurrencesForDay(event, dayStart, dayEnd);
+  }
+
+  private findNodeIcalRecurrenceOverride(
+    recurrences: Record<string, { start?: Date; end?: Date }> | undefined,
+    occurrenceStart: Date,
+  ): { start?: Date; end?: Date } | null {
+    if (!recurrences) {
+      return null;
+    }
+
+    for (const recurrence of Object.values(recurrences)) {
+      if (!(recurrence?.start instanceof Date)) {
+        continue;
+      }
+
+      if (recurrence.start.getTime() === occurrenceStart.getTime()) {
+        return recurrence;
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeRecurringOccurrenceStart(
+    occurrenceStart: Date,
+    baseStartDate: Date,
+  ): Date {
+    return new Date(
+      occurrenceStart.getFullYear(),
+      occurrenceStart.getMonth(),
+      occurrenceStart.getDate(),
+      baseStartDate.getHours(),
+      baseStartDate.getMinutes(),
+      baseStartDate.getSeconds(),
+      baseStartDate.getMilliseconds(),
+    );
+  }
+
+  private getNodeIcalRecurrenceOverridesForDay(
+    recurrences: Record<string, { start?: Date; end?: Date }> | undefined,
+    dayStart: Date,
+    dayEnd: Date,
+  ): Array<{ start: Date; end: Date }> {
+    if (!recurrences) {
+      return [];
+    }
+
+    const occurrences: Array<{ start: Date; end: Date }> = [];
+
+    for (const recurrence of Object.values(recurrences)) {
+      const recurrenceStart =
+        recurrence?.start instanceof Date ? recurrence.start : null;
+      const recurrenceEnd =
+        recurrence?.end instanceof Date ? recurrence.end : null;
+
+      if (!recurrenceStart || !recurrenceEnd) {
+        continue;
+      }
+
+      if (
+        !Number.isFinite(recurrenceStart.getTime()) ||
+        !Number.isFinite(recurrenceEnd.getTime()) ||
+        recurrenceEnd.getTime() <= recurrenceStart.getTime()
+      ) {
+        continue;
+      }
+
+      if (recurrenceEnd <= dayStart || recurrenceStart >= dayEnd) {
+        continue;
+      }
+
+      occurrences.push({
+        start: recurrenceStart,
+        end: recurrenceEnd,
+      });
+    }
+
+    return occurrences;
+  }
+
+  private isNodeIcalOccurrenceExcluded(
+    exdate: Record<string, unknown> | undefined,
+    occurrenceStart: Date,
+    resolvedStart: Date,
+  ): boolean {
+    if (!exdate) {
+      return false;
+    }
+
+    for (const excludedDate of Object.values(exdate)) {
+      if (!(excludedDate instanceof Date)) {
+        continue;
+      }
+
+      if (
+        excludedDate.getTime() === occurrenceStart.getTime() ||
+        excludedDate.getTime() === resolvedStart.getTime()
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private parseIcsEvents(rawCalendar: string): ParsedIcsEvent[] {
