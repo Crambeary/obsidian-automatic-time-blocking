@@ -116,9 +116,10 @@ Read the full guide here:
 - support manual time block bullets in the active note
 - support overlapping manual block windows
 - support external task intake from selected notes or folders
+- support first-party Kanban board intake from selected board notes with per-board column mappings
 - support Dataview-backed external task discovery when Dataview is installed
 - support remote calendar busy-time avoidance
-- support completion sync between generated planner tasks and source tasks
+- support completion sync between generated planner tasks and source tasks, including Kanban done/reopen moves
 - support task filtering with include and exclude patterns using plain text or regex
 
 ## Good To Know
@@ -128,6 +129,8 @@ Read the full guide here:
 - manual block bullets can use plain words like `work` or hashtags like `#work`
 - manually timed tasks still behave like explicit placements
 - generated planner output is treated as plugin output on reruns
+- selected Kanban boards are treated as first-party task sources, and only configured active columns are scheduled by default
+- the current Kanban integration expects Markdown-backed boards with `## Column` headings and bullet cards
 
 ## Docs
 

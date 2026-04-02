@@ -11,6 +11,15 @@ import {
   TFile,
   TFolder,
 } from "obsidian";
+import {
+  KanbanBoardSetting,
+  moveKanbanCardInBoard,
+  extractKanbanBoard,
+  isKanbanInProgressColumn,
+  normalizeKanbanColumnName,
+  resolveKanbanBoardSetting,
+  splitKanbanColumnNames,
+} from "./kanban";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
@@ -87,6 +96,7 @@ interface CalendarEventDiagnostic {
 type AutomaticStartMode = "snapped" | "now";
 type ExternalTaskDiscoveryMode = "built-in" | "dataview";
 type SelectableTaskStatus = "open" | "inProgress" | "rescheduled";
+type TaskSourceType = "markdown-task" | "kanban-card";
 
 interface TimeframeDefinition {
   name: string;
@@ -120,6 +130,7 @@ interface ObsidianAutomaticTimeBlockingSettings {
   externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
   externalTaskNotePaths: string[];
   externalTaskFolderPaths: string[];
+  kanbanBoards: KanbanBoardSetting[];
   includeOpenTasks: boolean;
   includeInProgressTasks: boolean;
   includeRescheduledTasks: boolean;
@@ -146,6 +157,7 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   externalTaskDiscoveryMode: "built-in",
   externalTaskNotePaths: [],
   externalTaskFolderPaths: [],
+  kanbanBoards: [],
   includeOpenTasks: true,
   includeInProgressTasks: true,
   includeRescheduledTasks: true,
@@ -176,6 +188,9 @@ interface ParsedTask {
   indent: number;
   sourcePath: string;
   sourceLineNumber: number;
+  sourceType: TaskSourceType;
+  sourceFingerprintOverride?: string;
+  kanbanLastActiveColumnName?: string;
   isExternalSource: boolean;
   subtasks: ParsedTask[];
 }
@@ -185,11 +200,6 @@ type TaskDateTokenKind = "scheduled" | "due" | "start";
 interface TaskDateToken {
   kind: TaskDateTokenKind;
   date: string;
-}
-
-interface PlannerTaskReference {
-  sourcePath: string;
-  sourceFingerprint: string;
 }
 
 type PlannerTaskSyncStatus = "completed" | "active";
@@ -203,6 +213,8 @@ interface CompletionSyncMapping {
   plannerFingerprint: string;
   sourcePath: string;
   sourceFingerprint: string;
+  sourceType?: TaskSourceType;
+  kanbanLastActiveColumnName?: string;
 }
 
 interface SameNoteSyncSnapshotEntry {
@@ -213,6 +225,7 @@ interface SameNoteSyncSnapshotEntry {
 interface TaskCollectionResult {
   tasks: ParsedTask[];
   externalSourceFileCount: number;
+  kanbanBoardCount: number;
   usedDataviewIndex: boolean;
 }
 
@@ -427,6 +440,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       loadedData?.completionSyncMappings,
     );
 
+    this.settings.kanbanBoards = this.normalizeKanbanBoards(
+      this.settings.kanbanBoards,
+    );
     this.settings.timeframes = this.normalizeTimeframes(
       this.settings.timeframes,
     );
@@ -661,6 +677,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       sourceStatuses.set(this.buildSourceTaskFingerprint(task), "completed");
     }
 
+    for (const [sourceFingerprint, sourceStatus] of this.buildKanbanSourceStatuses(
+      sourceContent,
+      file.path,
+    )) {
+      sourceStatuses.set(sourceFingerprint, sourceStatus);
+    }
+
     let updatedPlanningTaskCount = 0;
     for (const [planningNotePath, mappings] of planningEntries) {
       const planningAbstractFile =
@@ -751,8 +774,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
             : ("active" as PlannerTaskSyncStatus),
       }))
       .map(({ mappingEntry, status }) => ({
+        mappingEntry,
         sourcePath: mappingEntry.sourcePath,
         sourceFingerprint: mappingEntry.sourceFingerprint,
+        sourceType: mappingEntry.sourceType ?? "markdown-task",
         status,
       }));
 
@@ -766,19 +791,19 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const referencesBySourcePath = new Map<
       string,
-      Map<string, PlannerTaskSyncStatus>
+      Array<{
+        mappingEntry: CompletionSyncMapping;
+        sourceFingerprint: string;
+        sourceType: TaskSourceType;
+        status: PlannerTaskSyncStatus;
+      }>
     >();
     for (const reference of syncedReferences) {
       if (!referencesBySourcePath.has(reference.sourcePath)) {
-        referencesBySourcePath.set(
-          reference.sourcePath,
-          new Map<string, PlannerTaskSyncStatus>(),
-        );
+        referencesBySourcePath.set(reference.sourcePath, []);
       }
 
-      referencesBySourcePath
-        .get(reference.sourcePath)
-        ?.set(reference.sourceFingerprint, reference.status);
+      referencesBySourcePath.get(reference.sourcePath)?.push(reference);
     }
 
     let syncedCompletedSourceTaskCount = 0;
@@ -786,20 +811,54 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     const changedSourceFiles: TFile[] = [];
     for (const [
       sourcePath,
-      sourceStatuses,
+      references,
     ] of referencesBySourcePath.entries()) {
       const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
       if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md") {
         continue;
       }
 
-      const syncResult = await this.syncSourceTasksFromPlannerStates(
-        abstractFile,
-        sourceStatuses,
+      const markdownStatuses = new Map<string, PlannerTaskSyncStatus>();
+      const kanbanReferences = references.filter(
+        (reference) => reference.sourceType === "kanban-card",
       );
-      syncedCompletedSourceTaskCount += syncResult.completedCount;
-      reopenedSourceTaskCount += syncResult.reopenedCount;
-      if (syncResult.completedCount > 0 || syncResult.reopenedCount > 0) {
+
+      for (const reference of references) {
+        if (reference.sourceType === "kanban-card") {
+          continue;
+        }
+
+        markdownStatuses.set(reference.sourceFingerprint, reference.status);
+      }
+
+      let changedSourceFile = false;
+      if (markdownStatuses.size > 0) {
+        const syncResult = await this.syncSourceTasksFromPlannerStates(
+          abstractFile,
+          markdownStatuses,
+        );
+        syncedCompletedSourceTaskCount += syncResult.completedCount;
+        reopenedSourceTaskCount += syncResult.reopenedCount;
+        changedSourceFile =
+          changedSourceFile ||
+          syncResult.completedCount > 0 ||
+          syncResult.reopenedCount > 0;
+      }
+
+      if (kanbanReferences.length > 0) {
+        const syncResult = await this.syncKanbanBoardFromPlannerStates(
+          abstractFile,
+          kanbanReferences,
+        );
+        syncedCompletedSourceTaskCount += syncResult.completedCount;
+        reopenedSourceTaskCount += syncResult.reopenedCount;
+        changedSourceFile =
+          changedSourceFile ||
+          syncResult.completedCount > 0 ||
+          syncResult.reopenedCount > 0;
+      }
+
+      if (changedSourceFile) {
         changedSourceFiles.push(abstractFile);
       }
     }
@@ -891,6 +950,89 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     await this.app.vault.modify(file, lines.join("\n"));
     this.appendDebugLog(
       `Completion sync updated ${completedCount} completed task${completedCount === 1 ? "" : "s"} and ${reopenedCount} reopened task${reopenedCount === 1 ? "" : "s"} in ${file.path}`,
+    );
+    return { completedCount, reopenedCount };
+  }
+
+  private async syncKanbanBoardFromPlannerStates(
+    file: TFile,
+    references: Array<{
+      mappingEntry: CompletionSyncMapping;
+      sourceFingerprint: string;
+      status: PlannerTaskSyncStatus;
+    }>,
+  ): Promise<{ completedCount: number; reopenedCount: number }> {
+    const boardSetting = this.getKanbanBoardSettingByPath(file.path);
+    if (!boardSetting) {
+      return { completedCount: 0, reopenedCount: 0 };
+    }
+
+    let content = await this.app.vault.read(file);
+    let completedCount = 0;
+    let reopenedCount = 0;
+    let changed = false;
+
+    for (const reference of references) {
+      const board = extractKanbanBoard(content);
+      const resolvedBoardSetting = resolveKanbanBoardSetting(
+        board.columns.map((column) => column.name),
+        boardSetting,
+      );
+      const targetColumnName =
+        reference.status === "completed"
+          ? resolvedBoardSetting.doneColumnName
+          : this.resolveKanbanReopenColumn(
+              content,
+              file.path,
+              reference.mappingEntry,
+            );
+
+      if (!targetColumnName) {
+        continue;
+      }
+
+      const moveResult = moveKanbanCardInBoard(content, {
+        sourceFingerprint: reference.sourceFingerprint,
+        targetColumnName,
+        status: reference.status,
+      });
+      if (!moveResult.moved) {
+        continue;
+      }
+
+      content = moveResult.updatedContent;
+      changed = true;
+
+      if (reference.status === "completed") {
+        const previousColumnName = moveResult.previousColumnName
+          ? normalizeKanbanColumnName(moveResult.previousColumnName)
+          : "";
+        if (
+          previousColumnName.length > 0 &&
+          previousColumnName !== resolvedBoardSetting.doneColumnName
+        ) {
+          reference.mappingEntry.kanbanLastActiveColumnName =
+            previousColumnName;
+        }
+        completedCount += 1;
+      } else {
+        if (moveResult.targetColumnName) {
+          reference.mappingEntry.kanbanLastActiveColumnName =
+            normalizeKanbanColumnName(moveResult.targetColumnName);
+        }
+        reopenedCount += 1;
+      }
+    }
+
+    if (!changed) {
+      return { completedCount: 0, reopenedCount: 0 };
+    }
+
+    this.ignoredModifyPaths.add(file.path);
+    await this.app.vault.modify(file, content);
+    await this.savePluginData();
+    this.appendDebugLog(
+      `Kanban sync updated ${completedCount} completed card${completedCount === 1 ? "" : "s"} and ${reopenedCount} reopened card${reopenedCount === 1 ? "" : "s"} in ${file.path}`,
     );
     return { completedCount, reopenedCount };
   }
@@ -1108,7 +1250,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     if (tasks.length === 0) {
       new Notice(
-        "No open tasks matched the active note or configured external source notes for this planning date.",
+        "No open tasks matched the active note, configured external source notes, or configured Kanban boards for this planning date.",
       );
       return;
     }
@@ -1177,6 +1319,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       taskCollection.externalSourceFileCount > 0
         ? ` Included tasks from ${taskCollection.externalSourceFileCount} external source note${taskCollection.externalSourceFileCount === 1 ? "" : "s"}.`
         : "";
+    const kanbanSourceSuffix =
+      taskCollection.kanbanBoardCount > 0
+        ? ` Included tasks from ${taskCollection.kanbanBoardCount} Kanban board${taskCollection.kanbanBoardCount === 1 ? "" : "s"}.`
+        : "";
     const discoverySuffix =
       taskCollection.usedDataviewIndex &&
       taskCollection.externalSourceFileCount > 0
@@ -1184,7 +1330,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         : "";
 
     new Notice(
-      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${partialSuffix}${skippedSuffix}${skippedTimeframeSuffix}${calendarSuffix}${externalSourceSuffix}${discoverySuffix}`,
+      `Generated ${generatedCount} time block${generatedCount === 1 ? "" : "s"}.${partialSuffix}${skippedSuffix}${skippedTimeframeSuffix}${calendarSuffix}${externalSourceSuffix}${kanbanSourceSuffix}${discoverySuffix}`,
     );
   }
 
@@ -1211,6 +1357,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     );
     const externalSourceFiles = externalTaskDiscovery.files;
     const externalTasks: ParsedTask[] = [];
+    const kanbanTasks = await this.collectKanbanTasksForPlanningNote(
+      activeFile,
+      selectedTaskStatuses,
+    );
 
     for (const externalSourceFile of externalSourceFiles) {
       const sourceContent = await this.app.vault.cachedRead(externalSourceFile);
@@ -1225,7 +1375,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       externalTasks.push(...sourceTasks);
     }
 
-    const allTasks = [...activeNoteTasks, ...externalTasks];
+    const allTasks = [...activeNoteTasks, ...externalTasks, ...kanbanTasks.tasks];
     const filteredTasks = this.applyTaskFilters(allTasks);
     const tasks = filteredTasks.sort(
       (leftTask, rightTask) =>
@@ -1236,6 +1386,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return {
       tasks,
       externalSourceFileCount: externalSourceFiles.length,
+      kanbanBoardCount: kanbanTasks.boardCount,
       usedDataviewIndex: externalTaskDiscovery.usedDataviewIndex,
     };
   }
@@ -1465,6 +1616,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         indent: indentMatch?.[1].length ?? 0,
         sourcePath,
         sourceLineNumber: index + 1,
+        sourceType: "markdown-task",
         isExternalSource,
         subtasks: [],
       };
@@ -1518,6 +1670,197 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return [...sourceFiles.values()].sort((leftFile, rightFile) =>
       leftFile.path.localeCompare(rightFile.path),
     );
+  }
+
+  private async collectKanbanTasksForPlanningNote(
+    activeFile: TFile,
+    selectedTaskStatuses: string[],
+  ): Promise<{ tasks: ParsedTask[]; boardCount: number }> {
+    const boardFiles = this.getConfiguredKanbanBoardFiles(activeFile);
+    const tasks: ParsedTask[] = [];
+
+    for (const { boardFile, boardSetting } of boardFiles) {
+      const boardContent = await this.app.vault.cachedRead(boardFile);
+      tasks.push(
+        ...this.extractKanbanTasksFromBoard(
+          boardContent,
+          boardFile,
+          boardSetting,
+          selectedTaskStatuses,
+        ),
+      );
+    }
+
+    return { tasks, boardCount: boardFiles.length };
+  }
+
+  private getConfiguredKanbanBoardFiles(
+    activeFile: TFile,
+  ): Array<{ boardFile: TFile; boardSetting: KanbanBoardSetting }> {
+    const boardFiles: Array<{ boardFile: TFile; boardSetting: KanbanBoardSetting }> =
+      [];
+
+    for (const boardSetting of this.settings.kanbanBoards) {
+      if (boardSetting.boardPath === activeFile.path) {
+        continue;
+      }
+
+      const abstractFile = this.app.vault.getAbstractFileByPath(
+        boardSetting.boardPath,
+      );
+      if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md") {
+        continue;
+      }
+
+      boardFiles.push({
+        boardFile: abstractFile,
+        boardSetting,
+      });
+    }
+
+    return boardFiles.sort((leftEntry, rightEntry) =>
+      leftEntry.boardFile.path.localeCompare(rightEntry.boardFile.path),
+    );
+  }
+
+  private extractKanbanTasksFromBoard(
+    boardContent: string,
+    boardFile: TFile,
+    boardSetting: KanbanBoardSetting,
+    selectedTaskStatuses: string[],
+  ): ParsedTask[] {
+    const board = extractKanbanBoard(boardContent);
+    const resolvedBoardSetting = resolveKanbanBoardSetting(
+      board.columns.map((column) => column.name),
+      boardSetting,
+    );
+    if (resolvedBoardSetting.activeColumnNames.length === 0) {
+      this.appendDebugLog(
+        `Kanban board ${boardFile.path} has no active columns configured or inferred; skipping board tasks.`,
+      );
+      return [];
+    }
+
+    const activeColumns = new Set(resolvedBoardSetting.activeColumnNames);
+    const tasks: ParsedTask[] = [];
+
+    for (const card of board.cards) {
+      if (!activeColumns.has(card.normalizedColumnName)) {
+        continue;
+      }
+
+      const statusMarker = isKanbanInProgressColumn(card.columnName) ? "/" : " ";
+      if (!selectedTaskStatuses.includes(statusMarker)) {
+        continue;
+      }
+
+      tasks.push({
+        text: card.text,
+        durationMinutes: this.parseDurationMinutes(card.text),
+        priority: this.parseTaskPriority(card.text),
+        manualStartMinutes: this.parseManualStartMinutes(card.text),
+        statusMarker,
+        indent: 0,
+        sourcePath: boardFile.path,
+        sourceLineNumber: card.lineIndex + 1,
+        sourceType: "kanban-card",
+        sourceFingerprintOverride: card.fingerprint,
+        kanbanLastActiveColumnName: card.normalizedColumnName,
+        isExternalSource: true,
+        subtasks: [],
+      });
+    }
+
+    return tasks;
+  }
+
+  private getKanbanBoardSettingByPath(
+    boardPath: string,
+  ): KanbanBoardSetting | null {
+    const normalizedPath = this.normalizeScopedSourcePath(boardPath);
+
+    return (
+      this.settings.kanbanBoards.find(
+        (boardSetting) => boardSetting.boardPath === normalizedPath,
+      ) ?? null
+    );
+  }
+
+  private buildKanbanSourceStatuses(
+    boardContent: string,
+    boardPath: string,
+  ): Map<string, PlannerTaskSyncStatus> {
+    const boardSetting = this.getKanbanBoardSettingByPath(boardPath);
+    if (!boardSetting) {
+      return new Map<string, PlannerTaskSyncStatus>();
+    }
+
+    const board = extractKanbanBoard(boardContent);
+    const resolvedBoardSetting = resolveKanbanBoardSetting(
+      board.columns.map((column) => column.name),
+      boardSetting,
+    );
+    const activeColumns = new Set(resolvedBoardSetting.activeColumnNames);
+    const sourceStatuses = new Map<string, PlannerTaskSyncStatus>();
+
+    for (const card of board.cards) {
+      if (card.checkboxStatus?.toLowerCase() === "x") {
+        sourceStatuses.set(card.fingerprint, "completed");
+        continue;
+      }
+
+      if (
+        resolvedBoardSetting.doneColumnName.length > 0 &&
+        card.normalizedColumnName === resolvedBoardSetting.doneColumnName
+      ) {
+        sourceStatuses.set(card.fingerprint, "completed");
+        continue;
+      }
+
+      if (activeColumns.has(card.normalizedColumnName)) {
+        sourceStatuses.set(card.fingerprint, "active");
+      }
+    }
+
+    return sourceStatuses;
+  }
+
+  private resolveKanbanReopenColumn(
+    boardContent: string,
+    boardPath: string,
+    mapping: CompletionSyncMapping,
+  ): string | null {
+    const boardSetting = this.getKanbanBoardSettingByPath(boardPath);
+    if (!boardSetting) {
+      return null;
+    }
+
+    const board = extractKanbanBoard(boardContent);
+    const resolvedBoardSetting = resolveKanbanBoardSetting(
+      board.columns.map((column) => column.name),
+      boardSetting,
+    );
+    const availableColumns = new Set(
+      board.columns.map((column) => column.normalizedName),
+    );
+
+    if (
+      mapping.kanbanLastActiveColumnName &&
+      availableColumns.has(mapping.kanbanLastActiveColumnName)
+    ) {
+      return mapping.kanbanLastActiveColumnName;
+    }
+
+    if (
+      resolvedBoardSetting.reopenColumnName.length > 0 &&
+      availableColumns.has(resolvedBoardSetting.reopenColumnName)
+    ) {
+      return resolvedBoardSetting.reopenColumnName;
+    }
+
+    return resolvedBoardSetting.activeColumnNames.find((columnName) =>
+      availableColumns.has(columnName),
+    ) ?? null;
   }
 
   private async getDataviewDiscoveryDiagnostics(
@@ -2694,6 +3037,64 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     return normalizedTimeframes;
+  }
+
+  normalizeKanbanBoards(value: unknown): KanbanBoardSetting[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const normalizedBoardPaths = new Set<string>();
+    const normalizedBoards: KanbanBoardSetting[] = [];
+
+    for (const board of value) {
+      if (!board || typeof board !== "object") {
+        continue;
+      }
+
+      const boardPath =
+        typeof (board as { boardPath?: unknown }).boardPath === "string"
+          ? this.normalizeScopedSourcePath(
+              (board as { boardPath: string }).boardPath,
+            )
+          : "";
+      if (boardPath.length === 0 || normalizedBoardPaths.has(boardPath)) {
+        continue;
+      }
+
+      normalizedBoardPaths.add(boardPath);
+      normalizedBoards.push({
+        boardPath,
+        activeColumnNames: Array.isArray(
+          (board as { activeColumnNames?: unknown }).activeColumnNames,
+        )
+          ? (board as { activeColumnNames: unknown[] }).activeColumnNames
+              .filter(
+                (columnName): columnName is string => typeof columnName === "string",
+              )
+              .map((columnName) => normalizeKanbanColumnName(columnName))
+              .filter((columnName, index, names) =>
+                columnName.length > 0 ? names.indexOf(columnName) === index : false,
+              )
+          : [],
+        doneColumnName:
+          typeof (board as { doneColumnName?: unknown }).doneColumnName ===
+          "string"
+            ? normalizeKanbanColumnName(
+                (board as { doneColumnName: string }).doneColumnName,
+              )
+            : "",
+        reopenColumnName:
+          typeof (board as { reopenColumnName?: unknown }).reopenColumnName ===
+          "string"
+            ? normalizeKanbanColumnName(
+                (board as { reopenColumnName: string }).reopenColumnName,
+              )
+            : "",
+      });
+    }
+
+    return normalizedBoards;
   }
 
   private haveSameNormalizedTags(
@@ -4244,6 +4645,8 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         plannerFingerprint,
         sourcePath: task.sourcePath,
         sourceFingerprint: this.buildSourceTaskFingerprint(task),
+        sourceType: task.sourceType,
+        kanbanLastActiveColumnName: task.kanbanLastActiveColumnName,
       });
     }
 
@@ -4279,7 +4682,17 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      normalizedEntries[planningNotePath] = normalizedMappings;
+      normalizedEntries[planningNotePath] = normalizedMappings.map((mapping) => ({
+        plannerFingerprint: mapping.plannerFingerprint,
+        sourcePath: mapping.sourcePath,
+        sourceFingerprint: mapping.sourceFingerprint,
+        sourceType:
+          mapping.sourceType === "kanban-card" ? "kanban-card" : "markdown-task",
+        kanbanLastActiveColumnName:
+          typeof mapping.kanbanLastActiveColumnName === "string"
+            ? normalizeKanbanColumnName(mapping.kanbanLastActiveColumnName)
+            : undefined,
+      }));
     }
 
     return normalizedEntries;
@@ -4310,6 +4723,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   }
 
   private buildSourceTaskFingerprint(task: ParsedTask): string {
+    if (typeof task.sourceFingerprintOverride === "string") {
+      return task.sourceFingerprintOverride;
+    }
+
     return this.normalizeTaskFingerprint(task.text);
   }
 
@@ -4634,6 +5051,24 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
     }
 
     return normalizedTimeframes;
+  }
+
+  private async saveKanbanBoardSettingRow(
+    index: number,
+    partialBoardSetting: Partial<KanbanBoardSetting>,
+  ): Promise<void> {
+    const existingBoardSetting = this.plugin.settings.kanbanBoards[index];
+    if (!existingBoardSetting) {
+      return;
+    }
+
+    this.plugin.settings.kanbanBoards[index] = {
+      ...existingBoardSetting,
+      ...partialBoardSetting,
+    };
+    this.plugin.settings.kanbanBoards =
+      this.plugin.normalizeKanbanBoards(this.plugin.settings.kanbanBoards);
+    await this.plugin.saveSettings();
   }
 
   display(): void {
@@ -5261,6 +5696,143 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           "Dataview mode is active. Automatic Time Blocking will use Dataview's indexed task discovery for external tasks and ignore the built-in file and folder source list while this mode is selected.",
         );
     }
+
+    containerEl.createEl("h3", { text: "Kanban boards" });
+
+    new Setting(containerEl)
+      .setName("Kanban board sources")
+      .setDesc(
+        "Optional. Pick Markdown-backed Kanban boards to treat as first-party task sources. Automatic Time Blocking will pull cards from configured active columns even when they do not carry planning-date markers.",
+      );
+
+    if (this.plugin.settings.kanbanBoards.length === 0) {
+      containerEl.createEl("p", {
+        text: "No Kanban boards selected yet.",
+      });
+    }
+
+    this.plugin.settings.kanbanBoards.forEach((boardSetting, index) => {
+      new Setting(containerEl)
+        .setName(`Kanban board ${index + 1}`)
+        .setDesc(boardSetting.boardPath)
+        .addButton((button) =>
+          button.setButtonText("Change").onClick(() => {
+            new ExternalSourceSuggestModal(
+              this.app,
+              "note",
+              async (selection) => {
+                if (!(selection instanceof TFile)) {
+                  return;
+                }
+
+                await this.saveKanbanBoardSettingRow(index, {
+                  boardPath: selection.path,
+                });
+                this.display();
+              },
+            ).open();
+          }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("trash")
+            .setTooltip("Remove Kanban board")
+            .onClick(async () => {
+              this.plugin.settings.kanbanBoards.splice(index, 1);
+              this.plugin.settings.kanbanBoards =
+                this.plugin.normalizeKanbanBoards(
+                  this.plugin.settings.kanbanBoards,
+                );
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName(`Board ${index + 1} active columns`)
+        .setDesc(
+          "Comma-separated column names that should schedule into time blocks. Leave empty to use defaults like Open, Doing, or In Progress. Todo, backlog, and ideas are excluded unless you add them here.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("In Progress, Doing")
+            .setValue(boardSetting.activeColumnNames.join(", "))
+            .onChange(async (value) => {
+              await this.saveKanbanBoardSettingRow(index, {
+                activeColumnNames: splitKanbanColumnNames(value),
+              });
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName(`Board ${index + 1} done column`)
+        .setDesc(
+          "Column that should receive completed planner tasks. Leave empty to use defaults like Done or Completed when available.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("Done")
+            .setValue(boardSetting.doneColumnName)
+            .onChange(async (value) => {
+              await this.saveKanbanBoardSettingRow(index, {
+                doneColumnName: normalizeKanbanColumnName(value),
+              });
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName(`Board ${index + 1} reopen column`)
+        .setDesc(
+          "Optional fallback column when a completed planner task is reopened. Leave empty to reuse the last known active column or the first active mapped column.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("In Progress")
+            .setValue(boardSetting.reopenColumnName)
+            .onChange(async (value) => {
+              await this.saveKanbanBoardSettingRow(index, {
+                reopenColumnName: normalizeKanbanColumnName(value),
+              });
+            }),
+        );
+    });
+
+    new Setting(containerEl)
+      .setName("Add Kanban board")
+      .setDesc("Pick another Kanban board note to include as a scoped task source.")
+      .addButton((button) =>
+        button.setButtonText("Add board").onClick(() => {
+          new ExternalSourceSuggestModal(
+            this.app,
+            "note",
+            async (selection) => {
+              if (!(selection instanceof TFile)) {
+                return;
+              }
+
+              if (
+                !this.plugin.settings.kanbanBoards.some(
+                  (boardSetting) => boardSetting.boardPath === selection.path,
+                )
+              ) {
+                this.plugin.settings.kanbanBoards.push({
+                  boardPath: selection.path,
+                  activeColumnNames: [],
+                  doneColumnName: "",
+                  reopenColumnName: "",
+                });
+                this.plugin.settings.kanbanBoards =
+                  this.plugin.normalizeKanbanBoards(
+                    this.plugin.settings.kanbanBoards,
+                  );
+                await this.plugin.saveSettings();
+              }
+
+              this.display();
+            },
+          ).open();
+        }),
+      );
 
     new Setting(containerEl)
       .setName("Debug log")

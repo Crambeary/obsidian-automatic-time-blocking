@@ -6,7 +6,8 @@
   "license": "MIT",
   "scripts": {
     "build": "vite build --mode=production",
-    "dev": "vite build --mode=development --watch"
+    "dev": "vite build --mode=development --watch",
+    "test": "tsc -p tsconfig.tests.json && node --test tests/kanban.test.js"
   },
   "devDependencies": {
     "obsidian": "obsidianmd/obsidian-api",

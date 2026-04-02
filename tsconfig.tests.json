@@ -5,7 +5,9 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "moduleResolution": "node",
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "rootDir": ".",
+    "outDir": ".tmp-tests"
   },
-  "include": ["src/**/*.ts", "types.d.ts"]
+  "include": ["src/kanban.ts"]
 }

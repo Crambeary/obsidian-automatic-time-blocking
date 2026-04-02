@@ -17,9 +17,10 @@ The plugin currently supports:
 - optional ignored calendar event title patterns
 - task intake from the active note
 - optional external task intake from configured notes and folders
+- optional Kanban board intake from selected board notes with per-board column mappings
 - Dataview-backed indexed external discovery when Dataview is installed
 - task date matching using `📅`, `⏳`, `🛫`, and `>YYYY-MM-DD`
-- bidirectional completion sync between generated planner tasks and source tasks
+- bidirectional completion sync between generated planner tasks and source tasks, including Kanban done/reopen board movement
 - same-note directional completion sync support
 - in-memory debug logging
 - task filtering with include and exclude patterns supporting plain text and regex
@@ -50,11 +51,21 @@ Recent additions:
 - debug logging records detected blocks, skipped lines, and derived windows
 - externally discovered generated planner tasks are skipped during source intake so prior planning notes are not re-imported as source tasks
 
+## Kanban Boards
+
+Recent additions:
+
+- selected Markdown-backed Kanban boards can be added as first-party task sources in settings
+- each board gets per-board active, done, and reopen column mappings in the settings UI
+- default column inference prefers active columns like `Open`, `Doing`, and `In Progress`
+- backlog, idea, and todo-style columns stay out of planning unless explicitly mapped in settings
+- planner completion can move a linked board card to the configured done column
+- reopening a planner task can move the linked card back to its remembered active column or configured fallback column
+
 ## Not Implemented Yet
 
 - direct Obsidian Tasks plugin API integration
 - direct reuse of Day Planner internal remote calendar state
-- Kanban note parsing
 - richer scheduling policies and heuristics
 - richer metadata preservation rules
 - dedicated settings UI for manual block behavior

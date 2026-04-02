@@ -150,12 +150,13 @@ The current prototype supports:
 - writing generated blocks under a configurable heading in the active note, including configurable heading level and heading text
 - snapping generated block start times to a configurable interval and skipping tasks that would exceed the configured work day
 - Dataview mode uses Dataview's whole-vault index for external task discovery, while built-in mode remains the scoped note-and-folder fallback
+- selected Markdown-backed Kanban boards can be configured as first-party task sources with per-board column mappings
+- the current Kanban integration targets Markdown-backed boards that use `## Column` headings with bullet cards
 - a global `Completion sync` setting that can turn completion syncing on or off
-- bidirectional completion syncing between generated planner tasks and their source tasks, including cross-note sync and same-note directional sync
+- bidirectional completion syncing between generated planner tasks and their source tasks, including Kanban done/reopen board movement, cross-note sync, and same-note directional sync
 
 It does not yet implement:
 
 - task intake from the Obsidian Tasks plugin API
-- Kanban note parsing
 - advanced scheduling heuristics
 - emoji-preservation logic beyond keeping task text as written
