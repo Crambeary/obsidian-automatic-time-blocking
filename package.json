@@ -7,7 +7,7 @@
   "scripts": {
     "build": "vite build --mode=production",
     "dev": "vite build --mode=development --watch",
-    "test": "tsc -p tsconfig.tests.json && node --test tests/kanban.test.js"
+    "test": "tsc -p tsconfig.tests.json && node --test tests/*.test.js"
   },
   "devDependencies": {
     "obsidian": "obsidianmd/obsidian-api",

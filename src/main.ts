@@ -20,6 +20,10 @@ import {
   resolveKanbanBoardSetting,
   splitKanbanColumnNames,
 } from "./kanban";
+import {
+  findHeadingSectionRange as findHeadingSectionRangeInLines,
+  upsertHeadingSection as upsertHeadingSectionInContent,
+} from "./planner-section";
 
 type TaskPriority = "highest" | "high" | "medium" | "none" | "low" | "lowest";
 
@@ -677,10 +681,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       sourceStatuses.set(this.buildSourceTaskFingerprint(task), "completed");
     }
 
-    for (const [sourceFingerprint, sourceStatus] of this.buildKanbanSourceStatuses(
-      sourceContent,
-      file.path,
-    )) {
+    for (const [
+      sourceFingerprint,
+      sourceStatus,
+    ] of this.buildKanbanSourceStatuses(sourceContent, file.path)) {
       sourceStatuses.set(sourceFingerprint, sourceStatus);
     }
 
@@ -809,10 +813,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     let syncedCompletedSourceTaskCount = 0;
     let reopenedSourceTaskCount = 0;
     const changedSourceFiles: TFile[] = [];
-    for (const [
-      sourcePath,
-      references,
-    ] of referencesBySourcePath.entries()) {
+    for (const [sourcePath, references] of referencesBySourcePath.entries()) {
       const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
       if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md") {
         continue;
@@ -1375,7 +1376,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       externalTasks.push(...sourceTasks);
     }
 
-    const allTasks = [...activeNoteTasks, ...externalTasks, ...kanbanTasks.tasks];
+    const allTasks = [
+      ...activeNoteTasks,
+      ...externalTasks,
+      ...kanbanTasks.tasks,
+    ];
     const filteredTasks = this.applyTaskFilters(allTasks);
     const tasks = filteredTasks.sort(
       (leftTask, rightTask) =>
@@ -1697,8 +1702,10 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   private getConfiguredKanbanBoardFiles(
     activeFile: TFile,
   ): Array<{ boardFile: TFile; boardSetting: KanbanBoardSetting }> {
-    const boardFiles: Array<{ boardFile: TFile; boardSetting: KanbanBoardSetting }> =
-      [];
+    const boardFiles: Array<{
+      boardFile: TFile;
+      boardSetting: KanbanBoardSetting;
+    }> = [];
 
     for (const boardSetting of this.settings.kanbanBoards) {
       if (boardSetting.boardPath === activeFile.path) {
@@ -1749,7 +1756,9 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      const statusMarker = isKanbanInProgressColumn(card.columnName) ? "/" : " ";
+      const statusMarker = isKanbanInProgressColumn(card.columnName)
+        ? "/"
+        : " ";
       if (!selectedTaskStatuses.includes(statusMarker)) {
         continue;
       }
@@ -1858,9 +1867,11 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       return resolvedBoardSetting.reopenColumnName;
     }
 
-    return resolvedBoardSetting.activeColumnNames.find((columnName) =>
-      availableColumns.has(columnName),
-    ) ?? null;
+    return (
+      resolvedBoardSetting.activeColumnNames.find((columnName) =>
+        availableColumns.has(columnName),
+      ) ?? null
+    );
   }
 
   private async getDataviewDiscoveryDiagnostics(
@@ -3070,11 +3081,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         )
           ? (board as { activeColumnNames: unknown[] }).activeColumnNames
               .filter(
-                (columnName): columnName is string => typeof columnName === "string",
+                (columnName): columnName is string =>
+                  typeof columnName === "string",
               )
               .map((columnName) => normalizeKanbanColumnName(columnName))
               .filter((columnName, index, names) =>
-                columnName.length > 0 ? names.indexOf(columnName) === index : false,
+                columnName.length > 0
+                  ? names.indexOf(columnName) === index
+                  : false,
               )
           : [],
         doneColumnName:
@@ -4682,17 +4696,21 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      normalizedEntries[planningNotePath] = normalizedMappings.map((mapping) => ({
-        plannerFingerprint: mapping.plannerFingerprint,
-        sourcePath: mapping.sourcePath,
-        sourceFingerprint: mapping.sourceFingerprint,
-        sourceType:
-          mapping.sourceType === "kanban-card" ? "kanban-card" : "markdown-task",
-        kanbanLastActiveColumnName:
-          typeof mapping.kanbanLastActiveColumnName === "string"
-            ? normalizeKanbanColumnName(mapping.kanbanLastActiveColumnName)
-            : undefined,
-      }));
+      normalizedEntries[planningNotePath] = normalizedMappings.map(
+        (mapping) => ({
+          plannerFingerprint: mapping.plannerFingerprint,
+          sourcePath: mapping.sourcePath,
+          sourceFingerprint: mapping.sourceFingerprint,
+          sourceType:
+            mapping.sourceType === "kanban-card"
+              ? "kanban-card"
+              : "markdown-task",
+          kanbanLastActiveColumnName:
+            typeof mapping.kanbanLastActiveColumnName === "string"
+              ? normalizeKanbanColumnName(mapping.kanbanLastActiveColumnName)
+              : undefined,
+        }),
+      );
     }
 
     return normalizedEntries;
@@ -4777,32 +4795,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     heading: string,
     headingLevel: number,
   ): { start: number; end: number } | null {
-    const normalizedLevel = Math.min(Math.max(Math.floor(headingLevel), 1), 6);
-    const headingLine = `${"#".repeat(normalizedLevel)} ${heading}`;
-    const headingIndex = lines.findIndex((line) => line.trim() === headingLine);
-
-    if (headingIndex === -1) {
-      return null;
-    }
-
-    let sectionEnd = lines.length;
-    for (let index = headingIndex + 1; index < lines.length; index += 1) {
-      const headingMatch = lines[index].match(/^(#{1,6})\s+/);
-      if (!headingMatch) {
-        continue;
-      }
-
-      const currentHeadingLevel = headingMatch[1].length;
-      if (currentHeadingLevel <= normalizedLevel) {
-        sectionEnd = index;
-        break;
-      }
-    }
-
-    return {
-      start: headingIndex,
-      end: sectionEnd,
-    };
+    return findHeadingSectionRangeInLines(lines, heading, headingLevel);
   }
 
   private upsertHeadingSection(
@@ -4811,32 +4804,12 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     headingLevel: number,
     sectionBody: string,
   ): string {
-    const trimmedContent = content.replace(/\s+$/, "");
-    const lines =
-      trimmedContent.length > 0 ? trimmedContent.split(/\r?\n/) : [];
-    const sectionRange = this.findHeadingSectionRange(
-      lines,
+    return upsertHeadingSectionInContent(
+      content,
       heading,
       headingLevel,
-    );
-
-    if (!sectionRange) {
-      const normalizedLevel = Math.min(
-        Math.max(Math.floor(headingLevel), 1),
-        6,
-      );
-      const headingLine = `${"#".repeat(normalizedLevel)} ${heading}`;
-      const prefix = trimmedContent.length > 0 ? `${trimmedContent}\n\n` : "";
-      return `${prefix}${headingLine}\n${sectionBody}\n`;
-    }
-
-    const updatedLines = [
-      ...lines.slice(0, sectionRange.start + 1),
       sectionBody,
-      ...lines.slice(sectionRange.end),
-    ];
-
-    return `${updatedLines.join("\n")}\n`;
+    );
   }
 }
 
@@ -5066,8 +5039,9 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
       ...existingBoardSetting,
       ...partialBoardSetting,
     };
-    this.plugin.settings.kanbanBoards =
-      this.plugin.normalizeKanbanBoards(this.plugin.settings.kanbanBoards);
+    this.plugin.settings.kanbanBoards = this.plugin.normalizeKanbanBoards(
+      this.plugin.settings.kanbanBoards,
+    );
     await this.plugin.saveSettings();
   }
 
@@ -5799,7 +5773,9 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Add Kanban board")
-      .setDesc("Pick another Kanban board note to include as a scoped task source.")
+      .setDesc(
+        "Pick another Kanban board note to include as a scoped task source.",
+      )
       .addButton((button) =>
         button.setButtonText("Add board").onClick(() => {
           new ExternalSourceSuggestModal(

@@ -2,6 +2,8 @@
 
 This project can be loaded into Obsidian as a developer build while you iterate on the plugin.
 
+The preferred verification path is now the local fixture-backed test harness. Use manual Obsidian checks for host-specific behavior after the automated harness covers the workflow you changed.
+
 ## Prerequisites
 
 - Node.js and npm installed
@@ -132,9 +134,66 @@ So the usual setup is:
 
 - Preferred: keep the repo directly in `.obsidian/plugins/obsidian-atb/` during active development.
 - Keep `npm run dev` running while you edit the plugin.
+- Run `npm test` as the default fast verification path before opening Obsidian.
 - Use an Obsidian hot reload plugin if you want the tightest feedback loop.
 - If the repo lives outside the vault, use a junction, symlink, or a copy step so Obsidian can see rebuilt files.
 - If reload behavior seems inconsistent, use **Reload plugins** before assuming the build failed.
+
+## Preferred verification workflow
+
+Use this order by default:
+
+1. Run `npm test`.
+2. If the change affects planning, rerun replacement, task intake, or completion sync, add or update a fixture-backed test first.
+3. Only after the automated harness passes, run a small manual Obsidian smoke check for host-specific behavior.
+
+The harness currently covers:
+
+- active-note planning runs against in-memory note fixtures
+- deterministic planner-section rebuilding
+- same-note completion sync behavior
+- cross-note completion sync behavior
+- pure Kanban parsing and Kanban card movement helpers
+
+The manual Obsidian smoke pass is still required for:
+
+- plugin load and startup behavior inside the real host app
+- command registration and ribbon wiring
+- settings tab rendering and interactive settings edits
+- real plugin interoperability that depends on host-managed state
+
+## Turning a manual bug into a characterization test
+
+When you find a bug during manual Obsidian use:
+
+1. Copy the smallest note state that reproduces it.
+2. Encode that note state as fixture text in a harness test under `tests/`.
+3. Include any required settings, active note path, external source notes, or Kanban boards in the scenario setup.
+4. Assert the exact final note text or task state that should result.
+5. Reproduce the current broken behavior first if needed, then fix the implementation and keep the test.
+
+Good candidates for characterization coverage are:
+
+- planner reruns that duplicate or fail to replace generated output
+- same-note sync regressions
+- cross-note sync regressions
+- planning bugs that depend on external note scope, time markers, or Kanban intake
+
+## Optional CLI smoke automation
+
+Obsidian now has an official CLI, which may become useful for a narrow smoke path later. For this repository, it is currently treated as supplemental only.
+
+Why it is not the primary path:
+
+- the fixture-backed harness already provides deterministic note-state setup and assertions
+- the current test needs are centered on note mutation and sync correctness, which are easier to debug in the harness
+- the CLI docs do not yet justify making plugin-command smoke coverage a required dependency for contributors or agents
+
+Current decision:
+
+- keep `npm test` as the required local regression path
+- keep manual Obsidian smoke checks for host behavior
+- defer any `obsidian-cli` automation until it proves distinct value for this repo
 
 ## Current prototype behavior
 

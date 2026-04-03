@@ -9,5 +9,5 @@
     "rootDir": ".",
     "outDir": ".tmp-tests"
   },
-  "include": ["src/kanban.ts"]
+  "include": ["src/**/*.ts", "types.d.ts", "tests/**/*.js"]
 }
