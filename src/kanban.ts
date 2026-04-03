@@ -154,7 +154,7 @@ export function resolveKanbanBoardSetting(
     configuredReopenColumn.length > 0 &&
     normalizedColumnNames.has(configuredReopenColumn)
       ? configuredReopenColumn
-      : activeColumnNames[0] ?? "";
+      : (activeColumnNames[0] ?? "");
 
   return {
     boardPath: boardSetting.boardPath,
@@ -179,6 +179,7 @@ export function extractKanbanBoard(content: string): ParsedKanbanBoard {
   let currentColumn: ParsedKanbanBoardColumn | null = null;
   let insideCodeFence = false;
   let insideFrontmatter = false;
+  let boardEndLineIndex = lines.length;
 
   for (const [index, line] of lines.entries()) {
     const trimmedLine = line.trim();
@@ -201,6 +202,12 @@ export function extractKanbanBoard(content: string): ParsedKanbanBoard {
     }
 
     if (insideCodeFence) {
+      continue;
+    }
+
+    if (/^%%\s*kanban:settings\s*$/.test(trimmedLine)) {
+      currentColumn = null;
+      boardEndLineIndex = index;
       continue;
     }
 
@@ -247,7 +254,7 @@ export function extractKanbanBoard(content: string): ParsedKanbanBoard {
 
   for (let index = 0; index < columns.length; index += 1) {
     columns[index].endLineIndexExclusive =
-      columns[index + 1]?.headingLineIndex ?? lines.length;
+      columns[index + 1]?.headingLineIndex ?? boardEndLineIndex;
   }
 
   return { columns, cards };
