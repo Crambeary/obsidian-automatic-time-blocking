@@ -755,12 +755,15 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
 
     const mappingsByPlannerFingerprint = new Map<
       string,
-      CompletionSyncMapping
+      CompletionSyncMapping[]
     >();
     for (const mappingEntry of mappingEntries) {
+      const existingMappings =
+        mappingsByPlannerFingerprint.get(mappingEntry.plannerFingerprint) ?? [];
+      existingMappings.push(mappingEntry);
       mappingsByPlannerFingerprint.set(
         mappingEntry.plannerFingerprint,
-        mappingEntry,
+        existingMappings,
       );
     }
 
@@ -768,15 +771,26 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       .filter((plannerTaskLine) =>
         mappingsByPlannerFingerprint.has(plannerTaskLine.fingerprint),
       )
-      .map((plannerTaskLine) => ({
-        mappingEntry: mappingsByPlannerFingerprint.get(
-          plannerTaskLine.fingerprint,
-        ) as CompletionSyncMapping,
-        status:
-          plannerTaskLine.statusMarker.toLowerCase() === "x"
-            ? ("completed" as PlannerTaskSyncStatus)
-            : ("active" as PlannerTaskSyncStatus),
-      }))
+      .flatMap((plannerTaskLine) => {
+        const matchingMappings =
+          mappingsByPlannerFingerprint.get(plannerTaskLine.fingerprint) ?? [];
+        if (matchingMappings.length !== 1) {
+          this.appendDebugLog(
+            `Completion sync skipped ambiguous planner mapping in ${file.path}: fingerprint=${plannerTaskLine.fingerprint}, matches=${matchingMappings.length}`,
+          );
+          return [];
+        }
+
+        return [
+          {
+            mappingEntry: matchingMappings[0],
+            status:
+              plannerTaskLine.statusMarker.toLowerCase() === "x"
+                ? ("completed" as PlannerTaskSyncStatus)
+                : ("active" as PlannerTaskSyncStatus),
+          },
+        ];
+      })
       .map(({ mappingEntry, status }) => ({
         mappingEntry,
         sourcePath: mappingEntry.sourcePath,
@@ -969,11 +983,24 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     }
 
     let content = await this.app.vault.read(file);
+    const initialSourceStatuses = this.buildKanbanSourceStatuses(
+      content,
+      file.path,
+    );
+    const changedReferences = references.filter(
+      (reference) =>
+        initialSourceStatuses.get(reference.sourceFingerprint) !==
+        reference.status,
+    );
+    if (changedReferences.length === 0) {
+      return { completedCount: 0, reopenedCount: 0 };
+    }
+
     let completedCount = 0;
     let reopenedCount = 0;
     let changed = false;
 
-    for (const reference of references) {
+    for (const reference of changedReferences) {
       const board = extractKanbanBoard(content);
       const resolvedBoardSetting = resolveKanbanBoardSetting(
         board.columns.map((column) => column.name),
@@ -2385,6 +2412,26 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     return ` [[${normalizedPath}|↗]]`;
   }
 
+  private buildPlannerSyncMarker(task: ParsedTask): string {
+    if (task.sourceType !== "kanban-card") {
+      return "";
+    }
+
+    const sourceFingerprint = this.buildSourceTaskFingerprint(task);
+    return ` <!-- atb-sync:${sourceFingerprint} -->`;
+  }
+
+  private buildPlannerSyncFingerprint(value: string): string {
+    return `atb-sync:${value.trim()}`;
+  }
+
+  private parsePlannerSyncFingerprint(taskText: string): string | null {
+    const syncMarkerMatch = taskText.match(/<!--\s*atb-sync:([^>]+?)\s*-->/);
+    return syncMarkerMatch
+      ? this.buildPlannerSyncFingerprint(syncMarkerMatch[1])
+      : null;
+  }
+
   private looksLikeGeneratedPlannerTask(taskText: string): boolean {
     const hasExplicitTimePrefix = /^\d{1,2}:\d{2}-\d{1,2}:\d{2}\s+/.test(
       taskText,
@@ -2581,7 +2628,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         skippedTimeframeTaskCount += 1;
         unscheduledLines.push(...this.buildRenderedTaskLines(task));
         this.appendDebugLog(
-          `Timeframe-constrained task could not be scheduled because no matching timeframe window is available within the configured workday: ${task.text}`,
+          `Timeframe-constrained task could not be scheduled because no matching timeframe window is available within the configured work day: ${task.text}`,
         );
         continue;
       }
@@ -3345,7 +3392,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         ? ` [${segmentIndex + 1}/${segmentCount}]`
         : "";
 
-    return `${this.escapePlannerDateTokens(task.text)}${segmentLabel}${this.buildTaskSourceBacklink(task)}`;
+    return `${this.escapePlannerDateTokens(task.text)}${segmentLabel}${this.buildTaskSourceBacklink(task)}${this.buildPlannerSyncMarker(task)}`;
   }
 
   private buildRenderedTaskLines(
@@ -3915,7 +3962,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      const occurrenceRanges = this.expandNodeIcalEventOccurrencesForDay(
+      const occurrenceRanges = this.expandEventOccurrencesForDay(
         calendarEntry,
         dayStart,
         dayEnd,
@@ -4058,451 +4105,6 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     };
   }
 
-  private expandNodeIcalEventOccurrencesForDay(
-    calendarEntry: {
-      start?: Date;
-      end?: Date;
-      rrule?: {
-        toString?: () => string;
-        between?: (after: Date, before: Date, inclusive?: boolean) => Date[];
-      };
-      recurrences?: Record<string, { start?: Date; end?: Date }>;
-      exdate?: Record<string, unknown>;
-      recurrenceid?: Date;
-      recurrenceId?: Date;
-      uid?: string;
-      summary?: string;
-    },
-    dayStart: Date,
-    dayEnd: Date,
-  ): Array<{ start: Date; end: Date }> {
-    const startDate =
-      calendarEntry.start instanceof Date
-        ? calendarEntry.start
-        : new Date(Number.NaN);
-    const endDate =
-      calendarEntry.end instanceof Date
-        ? calendarEntry.end
-        : new Date(Number.NaN);
-
-    if (
-      !Number.isFinite(startDate.getTime()) ||
-      !Number.isFinite(endDate.getTime())
-    ) {
-      return [];
-    }
-
-    const eventDuration = endDate.getTime() - startDate.getTime();
-    if (eventDuration <= 0) {
-      return [];
-    }
-
-    const recurrenceId =
-      calendarEntry.recurrenceId instanceof Date
-        ? calendarEntry.recurrenceId
-        : calendarEntry.recurrenceid instanceof Date
-          ? calendarEntry.recurrenceid
-          : null;
-
-    if (recurrenceId) {
-      return [{ start: startDate, end: endDate }];
-    }
-
-    const recurrenceOverrideOccurrences =
-      this.getNodeIcalRecurrenceOverridesForDay(
-        calendarEntry.recurrences,
-        dayStart,
-        dayEnd,
-      );
-
-    if (calendarEntry.rrule?.between) {
-      const searchStart = new Date(dayStart.getTime() - eventDuration);
-      const occurrenceStarts = calendarEntry.rrule.between(
-        searchStart,
-        dayEnd,
-        true,
-      );
-      const expandedOccurrences: Array<{ start: Date; end: Date }> = [
-        ...recurrenceOverrideOccurrences,
-      ];
-
-      for (const occurrenceStart of occurrenceStarts) {
-        if (!(occurrenceStart instanceof Date)) {
-          continue;
-        }
-
-        const overriddenOccurrence = this.findNodeIcalRecurrenceOverride(
-          calendarEntry.recurrences,
-          occurrenceStart,
-        );
-
-        const normalizedOccurrenceStart =
-          this.normalizeRecurringOccurrenceStart(occurrenceStart, startDate);
-        const resolvedStart =
-          overriddenOccurrence?.start instanceof Date
-            ? overriddenOccurrence.start
-            : normalizedOccurrenceStart;
-        const resolvedEnd =
-          overriddenOccurrence?.end instanceof Date
-            ? overriddenOccurrence.end
-            : new Date(resolvedStart.getTime() + eventDuration);
-
-        if (
-          !Number.isFinite(resolvedStart.getTime()) ||
-          !Number.isFinite(resolvedEnd.getTime()) ||
-          resolvedEnd.getTime() <= resolvedStart.getTime()
-        ) {
-          continue;
-        }
-
-        if (
-          this.isNodeIcalOccurrenceExcluded(
-            calendarEntry.exdate,
-            occurrenceStart,
-            resolvedStart,
-          )
-        ) {
-          continue;
-        }
-
-        if (resolvedEnd <= dayStart || resolvedStart >= dayEnd) {
-          continue;
-        }
-
-        if (
-          expandedOccurrences.some(
-            (existingOccurrence) =>
-              existingOccurrence.start.getTime() === resolvedStart.getTime() &&
-              existingOccurrence.end.getTime() === resolvedEnd.getTime(),
-          )
-        ) {
-          continue;
-        }
-
-        expandedOccurrences.push({
-          start: resolvedStart,
-          end: resolvedEnd,
-        });
-      }
-
-      if (expandedOccurrences.length > 0) {
-        return expandedOccurrences;
-      }
-    }
-
-    if (recurrenceOverrideOccurrences.length > 0) {
-      return recurrenceOverrideOccurrences;
-    }
-
-    const event: ParsedIcsEvent = {
-      uid: String(calendarEntry.uid ?? ""),
-      summary: String(calendarEntry.summary ?? "Untitled event"),
-      start: startDate,
-      end: endDate,
-      recurrenceRule: calendarEntry.rrule?.toString?.() ?? null,
-      recurrenceId,
-      exceptionDates: Object.values(calendarEntry.exdate ?? {})
-        .map((value) => (value instanceof Date ? value : new Date(Number.NaN)))
-        .filter((value) => Number.isFinite(value.getTime())),
-    };
-
-    return this.expandEventOccurrencesForDay(event, dayStart, dayEnd);
-  }
-
-  private findNodeIcalRecurrenceOverride(
-    recurrences: Record<string, { start?: Date; end?: Date }> | undefined,
-    occurrenceStart: Date,
-  ): { start?: Date; end?: Date } | null {
-    if (!recurrences) {
-      return null;
-    }
-
-    for (const recurrence of Object.values(recurrences)) {
-      if (!(recurrence?.start instanceof Date)) {
-        continue;
-      }
-
-      if (recurrence.start.getTime() === occurrenceStart.getTime()) {
-        return recurrence;
-      }
-    }
-
-    return null;
-  }
-
-  private normalizeRecurringOccurrenceStart(
-    occurrenceStart: Date,
-    baseStartDate: Date,
-  ): Date {
-    return new Date(
-      occurrenceStart.getFullYear(),
-      occurrenceStart.getMonth(),
-      occurrenceStart.getDate(),
-      baseStartDate.getHours(),
-      baseStartDate.getMinutes(),
-      baseStartDate.getSeconds(),
-      baseStartDate.getMilliseconds(),
-    );
-  }
-
-  private getNodeIcalRecurrenceOverridesForDay(
-    recurrences: Record<string, { start?: Date; end?: Date }> | undefined,
-    dayStart: Date,
-    dayEnd: Date,
-  ): Array<{ start: Date; end: Date }> {
-    if (!recurrences) {
-      return [];
-    }
-
-    const occurrences: Array<{ start: Date; end: Date }> = [];
-
-    for (const recurrence of Object.values(recurrences)) {
-      const recurrenceStart =
-        recurrence?.start instanceof Date ? recurrence.start : null;
-      const recurrenceEnd =
-        recurrence?.end instanceof Date ? recurrence.end : null;
-
-      if (!recurrenceStart || !recurrenceEnd) {
-        continue;
-      }
-
-      if (
-        !Number.isFinite(recurrenceStart.getTime()) ||
-        !Number.isFinite(recurrenceEnd.getTime()) ||
-        recurrenceEnd.getTime() <= recurrenceStart.getTime()
-      ) {
-        continue;
-      }
-
-      if (recurrenceEnd <= dayStart || recurrenceStart >= dayEnd) {
-        continue;
-      }
-
-      occurrences.push({
-        start: recurrenceStart,
-        end: recurrenceEnd,
-      });
-    }
-
-    return occurrences;
-  }
-
-  private isNodeIcalOccurrenceExcluded(
-    exdate: Record<string, unknown> | undefined,
-    occurrenceStart: Date,
-    resolvedStart: Date,
-  ): boolean {
-    if (!exdate) {
-      return false;
-    }
-
-    for (const excludedDate of Object.values(exdate)) {
-      if (!(excludedDate instanceof Date)) {
-        continue;
-      }
-
-      if (
-        excludedDate.getTime() === occurrenceStart.getTime() ||
-        excludedDate.getTime() === resolvedStart.getTime()
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private parseIcsEvents(rawCalendar: string): ParsedIcsEvent[] {
-    const unfoldedLines = rawCalendar
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .replace(/\n[ \t]/g, "")
-      .split("\n");
-    const events: ParsedIcsEvent[] = [];
-    let currentEvent: ParsedIcsEvent | null = null;
-
-    for (const line of unfoldedLines) {
-      if (line === "BEGIN:VEVENT") {
-        currentEvent = {
-          uid: "",
-          summary: "",
-          start: new Date(Number.NaN),
-          end: new Date(Number.NaN),
-          recurrenceRule: null,
-          recurrenceId: null,
-          exceptionDates: [],
-        };
-        continue;
-      }
-
-      if (line === "END:VEVENT") {
-        if (
-          currentEvent &&
-          currentEvent.uid.length > 0 &&
-          Number.isFinite(currentEvent.start.getTime()) &&
-          Number.isFinite(currentEvent.end.getTime()) &&
-          currentEvent.end.getTime() > currentEvent.start.getTime()
-        ) {
-          events.push(currentEvent);
-        }
-        currentEvent = null;
-        continue;
-      }
-
-      if (!currentEvent) {
-        continue;
-      }
-
-      const separatorIndex = line.indexOf(":");
-      if (separatorIndex === -1) {
-        continue;
-      }
-
-      const propertyWithParams = line.slice(0, separatorIndex);
-      const propertyValue = line.slice(separatorIndex + 1);
-      const [propertyName, ...parameterValues] = propertyWithParams.split(";");
-      const params = new Map<string, string>();
-
-      for (const parameterValue of parameterValues) {
-        const [parameterName, parameterContent] = parameterValue.split("=");
-        if (!parameterName || !parameterContent) {
-          continue;
-        }
-
-        params.set(parameterName.toUpperCase(), parameterContent);
-      }
-
-      switch (propertyName.toUpperCase()) {
-        case "UID":
-          currentEvent.uid = propertyValue.trim();
-          break;
-        case "SUMMARY":
-          currentEvent.summary = this.decodeIcsText(propertyValue.trim());
-          break;
-        case "DTSTART": {
-          const parsedDate = this.parseIcsDateValue(
-            propertyValue.trim(),
-            params,
-          );
-          if (parsedDate) {
-            currentEvent.start = parsedDate;
-          }
-          break;
-        }
-        case "DTEND": {
-          const parsedDate = this.parseIcsDateValue(
-            propertyValue.trim(),
-            params,
-          );
-          if (parsedDate) {
-            currentEvent.end = parsedDate;
-          }
-          break;
-        }
-        case "DURATION": {
-          if (Number.isFinite(currentEvent.start.getTime())) {
-            const durationMilliseconds = this.parseIcsDurationToMilliseconds(
-              propertyValue.trim(),
-            );
-            if (durationMilliseconds > 0) {
-              currentEvent.end = new Date(
-                currentEvent.start.getTime() + durationMilliseconds,
-              );
-            }
-          }
-          break;
-        }
-        case "RRULE":
-          currentEvent.recurrenceRule = propertyValue.trim();
-          break;
-        case "RECURRENCE-ID": {
-          const parsedDate = this.parseIcsDateValue(
-            propertyValue.trim(),
-            params,
-          );
-          if (parsedDate) {
-            currentEvent.recurrenceId = parsedDate;
-          }
-          break;
-        }
-        case "EXDATE": {
-          const parsedDates = propertyValue
-            .split(",")
-            .map((value) => this.parseIcsDateValue(value.trim(), params))
-            .filter((value): value is Date => value instanceof Date);
-          currentEvent.exceptionDates.push(...parsedDates);
-          break;
-        }
-      }
-    }
-
-    return events;
-  }
-
-  private decodeIcsText(value: string): string {
-    return value
-      .replace(/\\n/gi, "\n")
-      .replace(/\r\n/gi, "\n")
-      .replace(/\r/gi, "\n")
-      .replace(/\n[ \t]/gi, "")
-      .replace(/\\,/g, ",")
-      .replace(/\\;/g, ";")
-      .replace(/\\\\/g, "\\");
-  }
-
-  private parseIcsDateValue(
-    value: string,
-    params: Map<string, string>,
-  ): Date | null {
-    const valueType = params.get("VALUE")?.toUpperCase();
-
-    if (valueType === "DATE" || /^\d{8}$/.test(value)) {
-      const year = Number(value.slice(0, 4));
-      const month = Number(value.slice(4, 6)) - 1;
-      const day = Number(value.slice(6, 8));
-      return new Date(year, month, day, 0, 0, 0, 0);
-    }
-
-    const dateTimeMatch = value.match(
-      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/,
-    );
-    if (!dateTimeMatch) {
-      return null;
-    }
-
-    const year = Number(dateTimeMatch[1]);
-    const month = Number(dateTimeMatch[2]) - 1;
-    const day = Number(dateTimeMatch[3]);
-    const hours = Number(dateTimeMatch[4]);
-    const minutes = Number(dateTimeMatch[5]);
-    const seconds = Number(dateTimeMatch[6]);
-
-    if (value.endsWith("Z")) {
-      return new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-    }
-
-    return new Date(year, month, day, hours, minutes, seconds, 0);
-  }
-
-  private parseIcsDurationToMilliseconds(value: string): number {
-    const durationMatch = value.match(
-      /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/,
-    );
-    if (!durationMatch) {
-      return 0;
-    }
-
-    const weeks = Number(durationMatch[1] ?? 0);
-    const days = Number(durationMatch[2] ?? 0);
-    const hours = Number(durationMatch[3] ?? 0);
-    const minutes = Number(durationMatch[4] ?? 0);
-    const seconds = Number(durationMatch[5] ?? 0);
-
-    return (
-      ((((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000
-    );
-  }
-
   private shouldIgnoreCalendarEvent(eventSummary: string): boolean {
     const ignoredPatterns = this.settings.ignoredCalendarEventPatterns
       .split(/\r?\n/)
@@ -4545,10 +4147,63 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         ? Number(parsedRule.get("INTERVAL"))
         : undefined,
       until: parsedRule.get("UNTIL")
-        ? (this.parseIcsDateValue(parsedRule.get("UNTIL") ?? "", new Map()) ??
+        ? (this.parseIcsUntilDateValue(parsedRule.get("UNTIL") ?? "") ??
           undefined)
         : undefined,
     };
+  }
+
+  private parseIcsUntilDateValue(value: string): Date | null {
+    const trimmedValue = value.trim();
+    if (trimmedValue.length === 0) {
+      return null;
+    }
+
+    const utcDateTimeMatch = trimmedValue.match(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+    );
+    if (utcDateTimeMatch) {
+      return new Date(
+        Date.UTC(
+          Number(utcDateTimeMatch[1]),
+          Number(utcDateTimeMatch[2]) - 1,
+          Number(utcDateTimeMatch[3]),
+          Number(utcDateTimeMatch[4]),
+          Number(utcDateTimeMatch[5]),
+          Number(utcDateTimeMatch[6]),
+        ),
+      );
+    }
+
+    const localDateTimeMatch = trimmedValue.match(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/,
+    );
+    if (localDateTimeMatch) {
+      return new Date(
+        Number(localDateTimeMatch[1]),
+        Number(localDateTimeMatch[2]) - 1,
+        Number(localDateTimeMatch[3]),
+        Number(localDateTimeMatch[4]),
+        Number(localDateTimeMatch[5]),
+        Number(localDateTimeMatch[6]),
+      );
+    }
+
+    const dateOnlyMatch = trimmedValue.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (dateOnlyMatch) {
+      return new Date(
+        Number(dateOnlyMatch[1]),
+        Number(dateOnlyMatch[2]) - 1,
+        Number(dateOnlyMatch[3]),
+        23,
+        59,
+        59,
+        999,
+      );
+    }
+
+    const parsedDate = new Date(trimmedValue);
+    return Number.isFinite(parsedDate.getTime()) ? parsedDate : null;
   }
 
   private expandEventOccurrencesForDay(
@@ -4636,9 +4291,14 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       return null;
     }
 
+    const syncFingerprint = this.parsePlannerSyncFingerprint(taskMatch[2]);
+    const fingerprint = syncFingerprint
+      ? syncFingerprint
+      : this.buildPlannerFingerprintFromRenderedText(taskMatch[2]);
+
     return {
       statusMarker: taskMatch[1],
-      fingerprint: this.buildPlannerFingerprintFromRenderedText(taskMatch[2]),
+      fingerprint,
     };
   }
 
@@ -4647,7 +4307,7 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
     tasks: ParsedTask[],
   ): Promise<void> {
     const flattenedTasks = this.flattenTasks(tasks);
-    const mappingsByFingerprint = new Map<string, CompletionSyncMapping>();
+    const mappingsByFingerprint = new Map<string, CompletionSyncMapping[]>();
 
     for (const task of flattenedTasks) {
       const plannerFingerprint = this.buildPlannerTaskFingerprint(task);
@@ -4655,18 +4315,25 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
         continue;
       }
 
-      mappingsByFingerprint.set(plannerFingerprint, {
+      const mappingEntry = {
         plannerFingerprint,
         sourcePath: task.sourcePath,
         sourceFingerprint: this.buildSourceTaskFingerprint(task),
         sourceType: task.sourceType,
         kanbanLastActiveColumnName: task.kanbanLastActiveColumnName,
-      });
+      };
+      const existingMappings =
+        mappingsByFingerprint.get(plannerFingerprint) ?? [];
+      existingMappings.push(mappingEntry);
+      mappingsByFingerprint.set(plannerFingerprint, existingMappings);
     }
 
-    this.completionSyncMappings[planningNotePath] = [
-      ...mappingsByFingerprint.values(),
-    ];
+    const normalizedMappings: CompletionSyncMapping[] = [];
+    for (const mappings of mappingsByFingerprint.values()) {
+      normalizedMappings.push(...mappings);
+    }
+
+    this.completionSyncMappings[planningNotePath] = [...normalizedMappings];
     await this.savePluginData();
     await this.refreshSameNoteSyncSnapshot(planningNotePath);
   }
@@ -4728,6 +4395,13 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
   }
 
   private buildPlannerTaskFingerprint(task: ParsedTask): string {
+    const plannerSyncFingerprint = this.parsePlannerSyncFingerprint(
+      this.buildPlannerSyncMarker(task),
+    );
+    if (plannerSyncFingerprint) {
+      return plannerSyncFingerprint;
+    }
+
     const plannerText = `${this.escapePlannerDateTokens(task.text)}${this.buildTaskSourceBacklink(task)}`;
     return this.normalizeTaskFingerprint(plannerText);
   }

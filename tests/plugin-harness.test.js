@@ -191,3 +191,294 @@ test("same-note completion sync updates source tasks from planner edits", async 
     /## Time Blocks\n- \[x\] 09:00-09:30 Same-note sync target \[30m\]/m,
   );
 });
+
+test("generate harness writes planner section for configured Kanban board tasks", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-09.md",
+    files: {
+      "Daily/2026-04-09.md": ["# Daily Plan", ""].join("\n"),
+      "Projects/Board.md": [
+        "## Todo",
+        "- [ ] Not planned",
+        "",
+        "## In Progress",
+        "- [ ] Kanban active task [30m]",
+        "",
+        "## Done",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["in progress"],
+          doneColumnName: "done",
+          reopenColumnName: "in progress",
+        },
+      ],
+    },
+  });
+
+  await harness.runGenerate();
+
+  assert.match(
+    harness.getFileContent("Daily/2026-04-09.md"),
+    /- \[\/\] 09:00-09:30 Kanban active task \[30m\] \[\[Projects\/Board\|↗\]\] <!-- atb-sync:kanban::kanban active task \[30m\]::1 -->/m,
+  );
+  assert.doesNotMatch(
+    harness.getFileContent("Daily/2026-04-09.md"),
+    /Not planned/,
+  );
+});
+
+test("kanban duplicate cards stay independently syncable through planner completion", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-10.md",
+    files: {
+      "Daily/2026-04-10.md": ["# Daily Plan", ""].join("\n"),
+      "Projects/Board.md": [
+        "## In Progress",
+        "- [ ] Duplicate card [30m]",
+        "",
+        "## Review",
+        "- [ ] Duplicate card [30m]",
+        "",
+        "## Done",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["in progress", "review"],
+          doneColumnName: "done",
+          reopenColumnName: "review",
+        },
+      ],
+    },
+  });
+
+  await harness.runGenerate();
+
+  harness.setFileContent(
+    "Daily/2026-04-10.md",
+    harness
+      .getFileContent("Daily/2026-04-10.md")
+      .replace("- [/] 09:00-09:30", "- [x] 09:00-09:30"),
+  );
+
+  await harness.runModify("Daily/2026-04-10.md");
+
+  assert.match(
+    harness.getFileContent("Projects/Board.md"),
+    /## Done\n- \[x\] Duplicate card \[30m\]/m,
+  );
+  assert.match(
+    harness.getFileContent("Projects/Board.md"),
+    /## Review\n- \[ \] Duplicate card \[30m\]/m,
+  );
+});
+
+test("kanban planner reopen returns card to remembered active column", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-11.md",
+    files: {
+      "Daily/2026-04-11.md": ["# Daily Plan", ""].join("\n"),
+      "Projects/Board.md": [
+        "## Review",
+        "- [ ] Reopen me [30m]",
+        "",
+        "## Done",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["review"],
+          doneColumnName: "done",
+          reopenColumnName: "review",
+        },
+      ],
+    },
+  });
+
+  await harness.runGenerate();
+
+  harness.setFileContent(
+    "Daily/2026-04-11.md",
+    harness
+      .getFileContent("Daily/2026-04-11.md")
+      .replace("- [/] 09:00-09:30", "- [x] 09:00-09:30"),
+  );
+
+  await harness.runModify("Daily/2026-04-11.md");
+
+  await harness.runModify("Daily/2026-04-11.md");
+
+  harness.setFileContent(
+    "Daily/2026-04-11.md",
+    harness
+      .getFileContent("Daily/2026-04-11.md")
+      .replace("- [x] 09:00-09:30", "- [/] 09:00-09:30"),
+  );
+
+  await harness.runModify("Daily/2026-04-11.md");
+
+  assert.match(
+    harness.getFileContent("Projects/Board.md"),
+    /## Review\n- \[ \] Reopen me \[30m\]/m,
+  );
+  assert.doesNotMatch(
+    harness.getFileContent("Projects/Board.md"),
+    /## Done\n- \[x\] Reopen me \[30m\]/m,
+  );
+});
+
+test("kanban planner reopen falls back to the first available active column", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-12.md",
+    files: {
+      "Daily/2026-04-12.md": [
+        "# Daily Plan",
+        "",
+        "## Time Blocks",
+        "- [x] 09:00-09:30 Fallback me [30m] [[Projects/Board|↗]] <!-- atb-sync:kanban::fallback me [30m]::1 --> ✅ 2026-04-02",
+      ].join("\n"),
+      "Projects/Board.md": [
+        "## Doing",
+        "",
+        "## Done",
+        "- [x] Fallback me [30m]",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["doing"],
+          doneColumnName: "done",
+          reopenColumnName: "current",
+        },
+      ],
+    },
+    data: {
+      completionSyncMappings: {
+        "Daily/2026-04-12.md": [
+          {
+            plannerFingerprint: "atb-sync:kanban::fallback me [30m]::1",
+            sourcePath: "Projects/Board.md",
+            sourceFingerprint: "kanban::fallback me [30m]::1",
+            sourceType: "kanban-card",
+            kanbanLastActiveColumnName: "review",
+          },
+        ],
+      },
+    },
+  });
+
+  harness.setFileContent(
+    "Daily/2026-04-12.md",
+    harness
+      .getFileContent("Daily/2026-04-12.md")
+      .replace("- [x] 09:00-09:30", "- [/] 09:00-09:30"),
+  );
+
+  await harness.runModify("Daily/2026-04-12.md");
+
+  assert.match(
+    harness.getFileContent("Projects/Board.md"),
+    /## Doing\n- \[ \] Fallback me \[30m\]/m,
+  );
+  assert.doesNotMatch(
+    harness.getFileContent("Projects/Board.md"),
+    /## Done\n- \[x\] Fallback me \[30m\]/m,
+  );
+});
+
+test("kanban planner reopen is skipped when no valid destination exists", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-13.md",
+    files: {
+      "Daily/2026-04-13.md": [
+        "# Daily Plan",
+        "",
+        "## Time Blocks",
+        "- [x] 09:00-09:30 Stay done [30m] [[Projects/Board|↗]] <!-- atb-sync:kanban::stay done [30m]::1 --> ✅ 2026-04-02",
+      ].join("\n"),
+      "Projects/Board.md": ["## Done", "- [x] Stay done [30m]"].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["doing"],
+          doneColumnName: "done",
+          reopenColumnName: "current",
+        },
+      ],
+    },
+    data: {
+      completionSyncMappings: {
+        "Daily/2026-04-13.md": [
+          {
+            plannerFingerprint: "atb-sync:kanban::stay done [30m]::1",
+            sourcePath: "Projects/Board.md",
+            sourceFingerprint: "kanban::stay done [30m]::1",
+            sourceType: "kanban-card",
+            kanbanLastActiveColumnName: "review",
+          },
+        ],
+      },
+    },
+  });
+
+  harness.setFileContent(
+    "Daily/2026-04-13.md",
+    harness
+      .getFileContent("Daily/2026-04-13.md")
+      .replace("- [x] 09:00-09:30", "- [/] 09:00-09:30"),
+  );
+
+  await harness.runModify("Daily/2026-04-13.md");
+
+  assert.match(
+    harness.getFileContent("Projects/Board.md"),
+    /^## Done\n- \[x\] Stay done \[30m\]$/m,
+  );
+});

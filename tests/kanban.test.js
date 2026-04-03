@@ -44,6 +44,49 @@ test("default inference excludes backlog-style columns from active planning", ()
   assert.equal(inferKanbanDoneColumn(columns), "done");
 });
 
+test("extractKanbanBoard assigns distinct fingerprints to duplicate same-board cards", () => {
+  const board = extractKanbanBoard(
+    [
+      "## Doing",
+      "- [ ] Duplicate task [30m]",
+      "- [ ] Duplicate task [30m]",
+      "",
+      "## Done",
+    ].join("\n"),
+  );
+
+  assert.equal(board.cards.length, 2);
+  assert.notEqual(board.cards[0].fingerprint, board.cards[1].fingerprint);
+  assert.equal(board.cards[0].fingerprint, "kanban::duplicate task [30m]::1");
+  assert.equal(board.cards[1].fingerprint, "kanban::duplicate task [30m]::2");
+});
+
+test("extractKanbanBoard ignores headings and cards inside code fences", () => {
+  const board = extractKanbanBoard(
+    [
+      "## Doing",
+      "- [ ] Real task",
+      "",
+      "```md",
+      "## Done",
+      "- [x] Hidden task",
+      "```",
+      "",
+      "## Review",
+      "- [ ] Another real task",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(
+    board.columns.map((column) => column.name),
+    ["Doing", "Review"],
+  );
+  assert.deepEqual(
+    board.cards.map((card) => card.text),
+    ["Real task", "Another real task"],
+  );
+});
+
 test("resolveKanbanBoardSetting honors per-board overrides", () => {
   const resolved = resolveKanbanBoardSetting(["Backlog", "Doing", "Shipped"], {
     boardPath: "Projects/Board.md",
@@ -55,6 +98,19 @@ test("resolveKanbanBoardSetting honors per-board overrides", () => {
   assert.deepEqual(resolved.activeColumnNames, ["doing"]);
   assert.equal(resolved.doneColumnName, "shipped");
   assert.equal(resolved.reopenColumnName, "doing");
+});
+
+test("resolveKanbanBoardSetting falls back when configured columns are unavailable", () => {
+  const resolved = resolveKanbanBoardSetting(["Backlog", "Review", "Done"], {
+    boardPath: "Projects/Board.md",
+    activeColumnNames: ["doing"],
+    doneColumnName: "shipped",
+    reopenColumnName: "current",
+  });
+
+  assert.deepEqual(resolved.activeColumnNames, ["review"]);
+  assert.equal(resolved.doneColumnName, "done");
+  assert.equal(resolved.reopenColumnName, "review");
 });
 
 test("moveKanbanCardInBoard moves cards between columns and updates checkbox status", () => {
