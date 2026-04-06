@@ -105,9 +105,24 @@ How it works:
 - if a matching timeframe has no room, the task falls back to normal scheduling
 - manual time block bullets still work and combine with timeframe-based preferences
 
-Read the full guide here:
+## Task Duration
 
-- [`docs/manual-time-blocks.md`](docs/manual-time-blocks.md)
+Tasks can define their planned length inline.
+
+Examples:
+
+```md
+- [ ] Write draft [45m]
+- [ ] Quick email cleanup @15m
+- [ ] General admin
+```
+
+How it works:
+
+- use `[30m]` or `@30m` anywhere in task text to set a task duration in minutes
+- if a task does not include a duration marker, the plugin uses the `Default duration` setting
+- the current prototype supports minute-based markers like `[45m]` and `@15m`
+- generated planner tasks keep the duration marker text today
 
 ## Current User-Facing Features
 
