@@ -62,9 +62,9 @@ test("generate harness writes planner section for active-note tasks", async () =
 test("rerun harness rebuilds only the planner section deterministically", async () => {
   const harness = await createPluginHarness({
     pluginClass: PluginClass,
-    activeFilePath: "Daily/2026-04-06.md",
+    activeFilePath: "Daily/2026-04-18.md",
     files: {
-      "Daily/2026-04-06.md": [
+      "Daily/2026-04-18.md": [
         "# Daily Plan",
         "",
         "- [ ] Draft outline [30m]",
@@ -90,7 +90,7 @@ test("rerun harness rebuilds only the planner section deterministically", async 
   await harness.runGenerate();
 
   assert.equal(
-    normalizeMarkdown(harness.getFileContent("Daily/2026-04-06.md")),
+    normalizeMarkdown(harness.getFileContent("Daily/2026-04-18.md")),
     normalizeMarkdown(
       [
         "# Daily Plan",
@@ -190,6 +190,151 @@ test("same-note completion sync updates source tasks from planner edits", async 
     harness.getFileContent("Daily/2026-04-08.md"),
     /## Time Blocks\n- \[x\] 09:00-09:30 Same-note sync target \[30m\]/m,
   );
+});
+
+test("focused mode keeps planner generation on the active daily note only", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-14.md",
+    files: {
+      "Daily/2026-04-14.md": [
+        "# Daily Plan",
+        "",
+        "- [ ] Daily task [30m]",
+      ].join("\n"),
+      "Projects/Source.md": "- [ ] External task [30m] 📅 2026-04-14",
+      "Projects/Board.md": [
+        "## In Progress",
+        "- [ ] Kanban task [30m]",
+        "",
+        "## Done",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      focusedAtbMode: true,
+      externalTaskDiscoveryMode: "dataview",
+      externalTaskNotePaths: ["Projects/Source.md"],
+      kanbanBoards: [
+        {
+          boardPath: "Projects/Board.md",
+          activeColumnNames: ["in progress"],
+          doneColumnName: "done",
+          reopenColumnName: "in progress",
+        },
+      ],
+    },
+  });
+
+  await harness.runGenerate();
+
+  const dailyContent = harness.getFileContent("Daily/2026-04-14.md");
+  assert.match(dailyContent, /09:00-09:30 Daily task \[30m\]/m);
+  assert.doesNotMatch(dailyContent, /External task/);
+  assert.doesNotMatch(dailyContent, /Kanban task/);
+  assert.match(harness.getNoticeMessages()[0], /Generated 1 time block/);
+  assert.doesNotMatch(harness.getNoticeMessages()[0], /Included tasks from/);
+});
+
+test("focused mode still respects task status selection", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-15.md",
+    files: {
+      "Daily/2026-04-15.md": [
+        "# Daily Plan",
+        "",
+        "- [ ] Open task [30m]",
+        "- [/] In progress task [30m]",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      focusedAtbMode: true,
+      includeOpenTasks: false,
+      includeInProgressTasks: true,
+      includeRescheduledTasks: false,
+    },
+  });
+
+  await harness.runGenerate();
+
+  const dailyContent = harness.getFileContent("Daily/2026-04-15.md");
+  assert.match(dailyContent, /In progress task \[30m\]/);
+  assert.doesNotMatch(dailyContent, /09:00-09:30 Open task \[30m\]/);
+});
+
+test("focused mode still respects include and exclude text filters", async () => {
+  const harness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-16.md",
+    files: {
+      "Daily/2026-04-16.md": [
+        "# Daily Plan",
+        "",
+        "- [ ] Important work [30m] #focus",
+        "- [ ] Ignore me [30m] #focus #skip",
+        "- [ ] Casual task [30m]",
+      ].join("\n"),
+    },
+    settings: {
+      dayStartTime: "09:00",
+      workDayEndTime: "12:00",
+      startIntervalMinutes: 30,
+      plannerHeading: "Time Blocks",
+      plannerHeadingLevel: 2,
+      remoteCalendarUrls: [],
+      focusedAtbMode: true,
+      includeTasksWithText: "#focus",
+      excludeTasksWithText: "#skip",
+    },
+  });
+
+  await harness.runGenerate();
+
+  const dailyContent = harness.getFileContent("Daily/2026-04-16.md");
+  assert.match(dailyContent, /Important work \[30m\] #focus/);
+  assert.doesNotMatch(
+    dailyContent,
+    /09:30-10:00 Ignore me \[30m\] #focus #skip/,
+  );
+  assert.doesNotMatch(dailyContent, /09:30-10:00 Casual task \[30m\]/);
+});
+
+test("focused mode setting persists across save and reload", async () => {
+  const firstHarness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-17.md",
+    files: {
+      "Daily/2026-04-17.md": "# Daily Plan",
+    },
+    settings: {
+      focusedAtbMode: true,
+    },
+  });
+
+  await firstHarness.plugin.saveSettings();
+
+  const secondHarness = await createPluginHarness({
+    pluginClass: PluginClass,
+    activeFilePath: "Daily/2026-04-17.md",
+    files: {
+      "Daily/2026-04-17.md": "# Daily Plan",
+    },
+    data: firstHarness.plugin.__data,
+  });
+
+  assert.equal(secondHarness.plugin.settings.focusedAtbMode, true);
 });
 
 test("generate harness writes planner section for configured Kanban board tasks", async () => {

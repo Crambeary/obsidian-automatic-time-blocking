@@ -132,6 +132,7 @@ interface ObsidianAutomaticTimeBlockingSettings {
   remoteCalendarUrls: string[];
   ignoredCalendarEventPatterns: string;
   externalTaskDiscoveryMode: ExternalTaskDiscoveryMode;
+  focusedAtbMode: boolean;
   externalTaskNotePaths: string[];
   externalTaskFolderPaths: string[];
   kanbanBoards: KanbanBoardSetting[];
@@ -159,6 +160,7 @@ const DEFAULT_SETTINGS: ObsidianAutomaticTimeBlockingSettings = {
   remoteCalendarUrls: [],
   ignoredCalendarEventPatterns: "",
   externalTaskDiscoveryMode: "built-in",
+  focusedAtbMode: false,
   externalTaskNotePaths: [],
   externalTaskFolderPaths: [],
   kanbanBoards: [],
@@ -1379,6 +1381,21 @@ export default class ObsidianAutomaticTimeBlocking extends Plugin {
       }
       return this.externalTaskMatchesPlanningDate(task.text, planningDate);
     });
+    if (this.settings.focusedAtbMode) {
+      const filteredTasks = this.applyTaskFilters(activeNoteTasks);
+      const tasks = filteredTasks.sort(
+        (leftTask, rightTask) =>
+          this.getTaskPriorityRank(rightTask.priority) -
+          this.getTaskPriorityRank(leftTask.priority),
+      );
+
+      return {
+        tasks,
+        externalSourceFileCount: 0,
+        kanbanBoardCount: 0,
+        usedDataviewIndex: false,
+      };
+    }
     const externalTaskDiscovery = this.getExternalTaskDiscovery(
       activeFile,
       planningDate,
@@ -5163,6 +5180,21 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "Task discovery" });
 
     new Setting(containerEl)
+      .setName("Focused mode")
+      .setDesc(
+        "Keep planner generation on the currently open daily note only. When enabled, Automatic Time Blocking ignores configured external markdown, Dataview, and Kanban task sources.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.focusedAtbMode)
+          .onChange(async (value) => {
+            this.plugin.settings.focusedAtbMode = value;
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Task discovery mode")
       .setDesc(
         "Choose whether external tasks are discovered through the plugin's built-in scoped note and folder list or through Dataview. Dataview mode ignores the built-in source list and uses Dataview's indexed task discovery instead.",
@@ -5179,7 +5211,13 @@ class AutomaticTimeBlockingSettingTab extends PluginSettingTab {
           }),
       );
 
-    if (usesBuiltInDiscovery) {
+    if (this.plugin.settings.focusedAtbMode) {
+      new Setting(containerEl)
+        .setName("Focused intake")
+        .setDesc(
+          "Focused mode is active. Planner generation stays on the currently open daily note and skips configured external notes, folders, Dataview discovery, and Kanban boards.",
+        );
+    } else if (usesBuiltInDiscovery) {
       new Setting(containerEl)
         .setName("External task source notes")
         .setDesc(
