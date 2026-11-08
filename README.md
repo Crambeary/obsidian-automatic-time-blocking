@@ -2,7 +2,29 @@
 
 Automatic Time Blocking is an Obsidian plugin for turning tasks into time blocks in your daily note.
 
-It is built for people who want help planning the day without losing the ability to guide the schedule manually.
+A personal planning tool in active prototype development, built to help me
+plan the day while keeping manual guidance in the note. It writes to your
+vault and can sync task completion, so try it in a test vault first.
+
+## Install
+
+This repository provides builds through [GitHub Releases](https://github.com/Crambeary/obsidian-automatic-time-blocking/releases).
+For a manual install:
+
+1. Download `main.js` and `manifest.json` from the same release.
+2. Put both files in `<your-vault>/.obsidian/plugins/obsidian-atb/`.
+3. Reload Obsidian, allow community plugins, and enable **Automatic Time Blocking**.
+4. Open the plugin settings to choose your workday, default duration, and
+   planner heading before generating a plan.
+
+You can also add `Crambeary/obsidian-automatic-time-blocking` through
+[BRAT](https://github.com/TfTHacker/obsidian42-brat). For source builds, see
+[Development](#development); the compiled file is `dist/main.js`.
+
+Active-note planning does not require Tasks, Dataview, Kanban, or Day Planner.
+Dataview is an optional external discovery path; Day Planner can display the
+resulting note blocks. The plugin reads Tasks-style text and metadata; it
+does not use the Obsidian Tasks plugin API.
 
 ## What It Helps With
 
@@ -15,11 +37,16 @@ It is built for people who want help planning the day without losing the ability
 ## Quick Start
 
 1. Open your daily note.
-2. Add a few tasks.
+2. Add a few tasks outside the configured planner heading.
 3. Optionally add manual time block bullets.
 4. Run `Generate time blocks for active note`.
 
-Example:
+The command writes generated tasks under **Time Blocks** by default. On
+reruns, it rebuilds that planner section from source tasks; put durable task
+edits in the sources, since manual edits to generated output may be replaced.
+Completion sync can be disabled in settings if you only want a generated plan.
+
+Example input (set your workday to cover these windows):
 
 ```md
 - 12:00 - 17:00 work
@@ -147,6 +174,20 @@ How it works:
 - selected Kanban boards are treated as first-party task sources, and only configured active columns are scheduled by default
 - the current Kanban integration expects Markdown-backed boards with `## Column` headings and bullet cards
 
+## Limitations
+
+- This is a prototype, without a published compatibility matrix across
+  Obsidian versions or desktop/mobile environments.
+- Preferred tag windows are guidance, not hard constraints; tasks may fall
+  back to other available time. Tasks that cannot fit may be left unscheduled.
+- Explicit task start times can force placement even across busy ranges or
+  workday bounds. Review the generated plan rather than treating it as a
+  guarantee of a conflict-free day.
+- Remote calendar avoidance requires reachable ICS feeds. Check notices for
+  feed failures and use the calendar preview command to inspect busy ranges.
+- Kanban intake expects Markdown-backed boards with `## Column` headings;
+  it is not a general integration with every board format.
+
 ## Docs
 
 - **[Manual time blocks guide](docs/manual-time-blocks.md)**
@@ -170,11 +211,15 @@ Start development mode:
 npm run dev
 ```
 
-Create a build:
+Run the existing fixture-backed checks and create a build:
 
 ```bash
+npm test
 npm run build
 ```
+
+For manual loading, copy `dist/main.js` and the root `manifest.json` into
+`<your-vault>/.obsidian/plugins/obsidian-atb/`.
 
 Note: if you use hot reloading in Obsidian, you may also need the related hot-reload plugin enabled in your vault.
 
